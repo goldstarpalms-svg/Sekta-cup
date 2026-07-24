@@ -1,0 +1,6 @@
+# Heavy optional deep-learning frameworks.
+# Install in Colab/Kaggle or a local environment with enough disk/RAM.
+
+# Choose versions appropriate for your platform/CUDA setup.
+torch
+tensorflow
