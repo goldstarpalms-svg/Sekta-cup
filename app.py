@@ -596,7 +596,7 @@ def save_strong_picks_to_tracker(frame: pd.DataFrame, source: str) -> int:
     old = st.session_state.get("strong_pick_tracker", pd.DataFrame())
     combined = pd.concat([old, saved], ignore_index=True)
     if "match_id" in combined.columns and "best_market" in combined.columns:
-        combined = combined.drop_duplicates(subset=["match_id", "best_market", "best_pick", "saved_at_lagos"], keep="last")
+        combined = combined.drop_duplicates(subset=["match_id", "best_market", "best_pick"], keep="last")
     st.session_state["strong_pick_tracker"] = combined
     return len(saved)
 
@@ -681,7 +681,7 @@ elif page == "Setka Trading Desk":
         st.divider()
         st.caption("Trading Desk controls")
         desk_mode = st.selectbox("Mode", ["Protection Mode", "Balanced Mode", "Aggressive Mode"], index=0)
-        desk_auto_refresh = st.checkbox("Auto-refresh desk", value=True)
+        desk_auto_refresh = st.checkbox("Auto-refresh desk", value=False)
         desk_refresh_seconds = st.selectbox("Desk refresh every", [10, 15, 30, 60], index=1)
     if desk_auto_refresh:
         enable_browser_auto_refresh(desk_refresh_seconds)
@@ -984,7 +984,7 @@ elif page == "Live Match Center":
     with st.sidebar:
         st.divider()
         st.caption("Live match center")
-        live_auto_refresh = st.checkbox("Auto-refresh live scores", value=True)
+        live_auto_refresh = st.checkbox("Auto-refresh live scores", value=False)
         live_refresh_seconds = st.selectbox("Live refresh every", [10, 15, 30, 60], index=1)
     if live_auto_refresh:
         enable_browser_auto_refresh(live_refresh_seconds)
@@ -1157,7 +1157,7 @@ elif page == "Owner Edge Engine":
 
 elif page == "Strong Pick Tracker":
     st.title("📌 Strong Pick Tracker")
-    st.markdown("Track results only for GREEN/strong picks saved from the Trading Desk or Owner Edge Engine.")
+    st.markdown("Automatically grades only GREEN/strong picks saved from the Trading Desk or Owner Edge Engine. It checks official Setka results for the saved pick dates — no weak picks mixed in.")
 
     tracker = st.session_state.get("strong_pick_tracker", pd.DataFrame())
     upload = st.file_uploader("Optional: upload a previously downloaded strong-picks CSV", type=["csv"], key="strong_tracker_upload")
@@ -1175,26 +1175,38 @@ elif page == "Strong Pick Tracker":
         st.stop()
 
     today_lagos = pd.Timestamp.now(tz="Africa/Lagos").date()
-    c1, c2, c3 = st.columns([1, 1, 1.2])
+    c1, c2, c3 = st.columns([1, 1.2, 1.2])
     with c1:
-        track_date = st.date_input("Result date", value=today_lagos, key="strong_track_date")
+        auto_check_dates = st.checkbox("Auto-check saved pick dates", value=True)
     with c2:
-        period_label = st.selectbox("Day period", ["All", "Morning", "Evening", "Night"], index=0, key="strong_track_period")
-        period_map = {"All": None, "Morning": 1, "Evening": 2, "Night": 3}
+        track_date = st.date_input("Manual result date", value=today_lagos, key="strong_track_date")
     with c3:
-        if st.button("Refresh and grade strong picks", type="primary"):
+        if st.button("Check now", type="primary"):
             st.cache_data.clear()
             st.rerun()
-
-    try:
-        result_df = load_official_results(str(track_date), period_map[period_label])
-    except Exception as exc:
-        st.exception(exc)
-        st.stop()
 
     track = tracker.copy()
     if "match_id" in track.columns:
         track["match_id"] = pd.to_numeric(track["match_id"], errors="coerce")
+
+    dates_to_check: list[str] = []
+    if auto_check_dates and "date_lagos" in track.columns:
+        parsed_dates = pd.to_datetime(track["date_lagos"], errors="coerce").dt.date.dropna().unique().tolist()
+        dates_to_check = [d.isoformat() for d in parsed_dates][-10:]
+    if not dates_to_check:
+        dates_to_check = [str(track_date)]
+
+    try:
+        result_frames = [load_official_results(date_text, None) for date_text in dates_to_check]
+        result_df = pd.concat([df for df in result_frames if df is not None and not df.empty], ignore_index=True) if result_frames else pd.DataFrame()
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    if result_df.empty:
+        st.warning("No official results returned yet for the saved pick dates.")
+        st.stop()
+
     result_for_merge = result_df.copy()
     result_for_merge["actual_match"] = result_for_merge["player1"] + " vs " + result_for_merge["player2"]
     merged = track.merge(result_for_merge, on="match_id", how="left", suffixes=("_pick", "_result"))
@@ -1215,6 +1227,7 @@ elif page == "Strong Pick Tracker":
     m3.metric("Lost", f"{losses:,}")
     m4.metric("Pending", f"{pending:,}")
     m5.metric("Strong-pick accuracy", format_percent(accuracy) if accuracy is not None else "-")
+    st.caption(f"Auto-checked official Setka result date(s): {', '.join(dates_to_check)}")
 
     st.subheader("Strong pick results")
     cols = [
