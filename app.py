@@ -620,6 +620,24 @@ def save_strong_picks_to_tracker(frame: pd.DataFrame, source: str) -> int:
     return max(0, len(combined) - before)
 
 
+def expand_setka_result_dates(date_texts: list[str]) -> list[str]:
+    """Setka night tournaments can map to previous/next official dates.
+
+    If a saved pick is Lagos date 2026-07-25, official tournament/result
+    rows may be under 2026-07-24 or 2026-07-25 depending on location/period.
+    So the tracker checks date -1, date, and date +1.
+    """
+    dates: set[str] = set()
+    for value in date_texts:
+        dt = pd.to_datetime(value, errors="coerce")
+        if pd.isna(dt):
+            continue
+        base = dt.date()
+        for offset in [-1, 0, 1]:
+            dates.add((pd.Timestamp(base) + pd.Timedelta(days=offset)).date().isoformat())
+    return sorted(dates)
+
+
 def sync_official_results_for_dates(date_texts: list[str]) -> pd.DataFrame:
     """Fetch official Setka results for dates and persist them for future grading/training export."""
     frames = []
@@ -1211,7 +1229,32 @@ elif page == "Strong Pick Tracker":
             st.exception(exc)
 
     if tracker.empty:
-        st.info("No strong picks saved yet. Go to Setka Trading Desk or Owner Edge Engine and click 'Save GREEN picks to Strong Pick Tracker'.")
+        st.info("No strong picks saved yet. You can generate current GREEN picks now, or go to Setka Trading Desk / Owner Edge Engine and save GREEN picks.")
+        if st.button("Generate current GREEN picks now", type="primary"):
+            try:
+                upcoming_now = load_official_nearest().head(30)
+                rows_now = []
+                for _, match_row in upcoming_now.iterrows():
+                    if match_row.get("player1") and match_row.get("player2"):
+                        rows_now.append(prediction_pick_row(match_row, 18.5, 75.5, 3.5))
+                now_df = apply_pick_strengths(pd.DataFrame(rows_now))
+                if not now_df.empty:
+                    now_df["edge_score"] = now_df.apply(owner_edge_score, axis=1)
+                    now_df["owner_decision"] = now_df.apply(owner_decision, axis=1)
+                    now_df["reason"] = now_df.apply(owner_reason, axis=1)
+                    now_df["fair_odds"] = now_df["best_probability"].map(fair_decimal)
+                    now_df["minimum_value_odds"] = now_df["best_probability"].map(lambda p: minimum_value_odds(p, 0.03))
+                    green_now = now_df.loc[now_df["owner_decision"] == "GREEN"].copy()
+                    if green_now.empty:
+                        st.warning("No GREEN picks right now. The tracker did not save weak picks.")
+                    else:
+                        save_strong_picks_to_tracker(green_now, "Strong Pick Tracker Auto-Generate")
+                        st.success(f"Saved {len(green_now)} current GREEN picks. Reopening tracker...")
+                        st.rerun()
+                else:
+                    st.warning("No upcoming matches returned right now.")
+            except Exception as exc:
+                st.exception(exc)
         st.stop()
 
     today_lagos = pd.Timestamp.now(tz="Africa/Lagos").date()
@@ -1235,6 +1278,7 @@ elif page == "Strong Pick Tracker":
         dates_to_check = [d.isoformat() for d in parsed_dates][-10:]
     if not dates_to_check:
         dates_to_check = [str(track_date)]
+    dates_to_check = expand_setka_result_dates(dates_to_check)
 
     result_df = sync_official_results_for_dates(dates_to_check)
     if result_df.empty:
@@ -1264,6 +1308,8 @@ elif page == "Strong Pick Tracker":
     m4.metric("Pending", f"{pending:,}")
     m5.metric("Strong-pick accuracy", format_percent(accuracy) if accuracy is not None else "-")
     st.caption(f"Auto-checked official Setka result date(s): {', '.join(dates_to_check)}")
+    if pending:
+        st.info("Pending means the match has not finished yet, or the official result has not appeared in the Setka feed for the checked dates.")
 
     st.subheader("Strong pick results")
     cols = [
