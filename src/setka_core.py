@@ -353,6 +353,16 @@ def get_head_to_head(
         | ((matches["player1"] == player_b) & (matches["player2"] == player_a))
     )
     h2h = matches.loc[mask].copy()
+    # Backward-compatible guard for Streamlit caches created before set-count
+    # columns were added. Derive these safely from sets_played when missing.
+    if "sets_played" in h2h.columns:
+        if "sets_over_3_5" not in h2h.columns:
+            h2h["sets_over_3_5"] = pd.to_numeric(h2h["sets_played"], errors="coerce") > 3.5
+        if "sets_over_4_5" not in h2h.columns:
+            h2h["sets_over_4_5"] = pd.to_numeric(h2h["sets_played"], errors="coerce") > 4.5
+    else:
+        h2h["sets_over_3_5"] = np.nan
+        h2h["sets_over_4_5"] = np.nan
     if h2h.empty:
         summary = {
             "matches": 0,
