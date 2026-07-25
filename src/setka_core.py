@@ -475,13 +475,36 @@ def predict_match(
     )
     h2h_diff = h2h["player_a_win_rate"] - 0.5
 
-    # Elo is the anchor; form and H2H are smaller adjustments.
+    # Recency and point-difference upgrades.
+    # Setka players often repeat each other many times; recent H2H and current
+    # point/set dominance can be more useful than all-time H2H alone.
+    recent_h2h_rate = h2h["player_a_win_rate"]
+    if not h2h_rows.empty:
+        recent_h2h_rows = h2h_rows.head(12)
+        recent_h2h_rate = float(recent_h2h_rows["selected_player_won"].mean())
+    recent_h2h_diff = recent_h2h_rate - 0.5
+
+    point_diff = _value(a, "avg_point_diff", 0.0) - _value(b, "avg_point_diff", 0.0)
+    recent_point_diff = _value(a, "recent_avg_point_diff", _value(a, "avg_point_diff", 0.0)) - _value(
+        b, "recent_avg_point_diff", _value(b, "avg_point_diff", 0.0)
+    )
+    set_diff = _value(a, "avg_set_diff", 0.0) - _value(b, "avg_set_diff", 0.0)
+
+    # Elo is the anchor; form, H2H, and dominance are measured adjustments.
     score = _logit(elo_probability)
-    score += 0.70 * career_diff * min(a_rel, b_rel)
-    score += 0.95 * recent_diff * min(a_rel, b_rel)
-    score += 0.35 * first_set_diff * min(a_rel, b_rel)
-    score += 0.90 * h2h_diff * h2h_rel
-    player_a_win_probability = _clamp(_sigmoid(score), 0.03, 0.97)
+    score += 0.60 * career_diff * min(a_rel, b_rel)
+    score += 1.10 * recent_diff * min(a_rel, b_rel)
+    score += 0.30 * first_set_diff * min(a_rel, b_rel)
+    score += 0.55 * h2h_diff * h2h_rel
+    score += 0.55 * recent_h2h_diff * h2h_rel
+    score += 0.32 * math.tanh(recent_point_diff / 7.0) * min(a_rel, b_rel)
+    score += 0.18 * math.tanh(point_diff / 7.0) * min(a_rel, b_rel)
+    score += 0.18 * math.tanh(set_diff / 1.5) * min(a_rel, b_rel)
+
+    # Mild calibration prevents the rule model from becoming too aggressive
+    # when several correlated signals point in the same direction.
+    score *= 0.94
+    player_a_win_probability = _clamp(_sigmoid(score), 0.04, 0.96)
     player_b_win_probability = 1 - player_a_win_probability
 
     global_first_mean = float(global_stats.get("first_set_mean", 18.7))
@@ -547,14 +570,24 @@ def predict_match(
             (global_total_mean, 1.00),
             (_value(a, "avg_total_points", global_total_mean), 1.25 * a_rel),
             (_value(b, "avg_total_points", global_total_mean), 1.25 * b_rel),
-            (_value(a, "recent_avg_total_points", global_total_mean), 0.90 * a_rel),
-            (_value(b, "recent_avg_total_points", global_total_mean), 0.90 * b_rel),
+            (_value(a, "recent_avg_total_points", global_total_mean), 1.05 * a_rel),
+            (_value(b, "recent_avg_total_points", global_total_mean), 1.05 * b_rel),
             (h2h["avg_total_points"], 1.80 * h2h_rel),
         ],
         default=global_total_mean,
     )
-    # Close contests generally go 4/5 sets more often.
-    expected_total += ((0.5 - abs(player_a_win_probability - 0.5)) * 6.0) - 1.2
+    # Close contests generally go 4/5 sets more often. Player-level average
+    # sets also nudges totals up/down because Setka totals are highly set-count driven.
+    expected_sets = _weighted_mean(
+        [
+            (global_stats.get("avg_sets_played", 4.02), 1.0),
+            (_value(a, "avg_sets_played", global_stats.get("avg_sets_played", 4.02)), 0.8 * a_rel),
+            (_value(b, "avg_sets_played", global_stats.get("avg_sets_played", 4.02)), 0.8 * b_rel),
+        ],
+        default=global_stats.get("avg_sets_played", 4.02),
+    )
+    expected_total += ((0.5 - abs(player_a_win_probability - 0.5)) * 5.4) - 1.1
+    expected_total += (expected_sets - float(global_stats.get("avg_sets_played", 4.02))) * 7.0
     expected_total = _clamp(expected_total, 33.0, 135.0)
 
     total_std = _weighted_mean(
@@ -576,6 +609,18 @@ def predict_match(
     confidence_score += 15 if h2h_rows.shape[0] >= 3 else 5
     confidence = _confidence_label(confidence_score)
 
+    winner_probability = max(player_a_win_probability, player_b_win_probability)
+    upset_risk_flags: list[str] = []
+    if winner_probability < 0.58:
+        upset_risk_flags.append("weak winner edge")
+    if h2h["matches"] >= 8 and ((player_a_win_probability >= 0.5 and h2h["player_a_win_rate"] < 0.42) or (player_a_win_probability < 0.5 and h2h["player_a_win_rate"] > 0.58)):
+        upset_risk_flags.append("all-time H2H conflict")
+    if h2h["matches"] >= 8 and ((player_a_win_probability >= 0.5 and recent_h2h_rate < 0.42) or (player_a_win_probability < 0.5 and recent_h2h_rate > 0.58)):
+        upset_risk_flags.append("recent H2H conflict")
+    if abs(recent_point_diff) < 1.0 and winner_probability < 0.65:
+        upset_risk_flags.append("similar recent point form")
+    upset_risk = "Low" if not upset_risk_flags and winner_probability >= 0.62 else "Medium" if len(upset_risk_flags) <= 1 else "High"
+
     return {
         "player_a": player_a,
         "player_b": player_b,
@@ -596,6 +641,12 @@ def predict_match(
         "h2h_player_a_wins": int(h2h["player_a_wins"]),
         "h2h_player_b_wins": int(h2h["player_b_wins"]),
         "h2h_player_a_win_rate": float(h2h["player_a_win_rate"]),
+        "recent_h2h_player_a_win_rate": float(recent_h2h_rate),
+        "point_diff_signal": float(point_diff),
+        "recent_point_diff_signal": float(recent_point_diff),
+        "set_diff_signal": float(set_diff),
+        "upset_risk": upset_risk,
+        "upset_risk_flags": upset_risk_flags,
         "expected_first_set_points": expected_first,
         "first_set_line": float(first_set_line),
         "first_set_over_probability": first_set_over_probability,

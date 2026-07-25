@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
+from src.backtesting import run_holdout_backtest, threshold_table
 from src.setka_core import (
     build_context,
     comparison_table,
@@ -145,6 +146,18 @@ def train_ml_cached(algorithm: str, max_training_rows: int | None):
     )
 
 
+@st.cache_data(show_spinner="Running time-split backtest...")
+def run_backtest_cached(test_rows: int, first_set_line: float, total_points_line: float):
+    raw_matches, raw_leaderboard = load_raw_data()
+    return run_holdout_backtest(
+        raw_matches,
+        raw_leaderboard,
+        test_rows=test_rows,
+        first_set_line=first_set_line,
+        total_points_line=total_points_line,
+    )
+
+
 with st.sidebar:
     st.title("🏓 Setka Predictor")
     st.caption("Prediction dashboard from uploaded Setka match history + Elo leaderboard.")
@@ -157,6 +170,7 @@ with st.sidebar:
             "Live Predictions",
             "Results Checker",
             "Match Predictor",
+            "Accuracy Lab",
             "Smart Stake Calc",
             "Bet Slip Tools",
             "ML Lab",
@@ -328,16 +342,23 @@ def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line
         "expected_first_set_points": pred["expected_first_set_points"],
         "confidence": pred["confidence"],
         "confidence_score": pred["confidence_score"],
+        "upset_risk": pred.get("upset_risk", ""),
+        "upset_risk_flags": ", ".join(pred.get("upset_risk_flags", [])),
         "h2h_matches": pred["h2h_matches"],
     }
 
 
-def pick_strength(probability: float | None, confidence: str | None = None) -> str:
+def pick_strength(probability: float | None, confidence: str | None = None, upset_risk: str | None = None) -> str:
     if probability is None or pd.isna(probability):
         return "Avoid"
     p = float(probability)
     confidence = confidence or ""
-    if p >= 0.68 and confidence == "High":
+    upset_risk = upset_risk or ""
+    if upset_risk == "High" and p < 0.70:
+        return "Avoid"
+    if upset_risk == "Medium" and p < 0.62:
+        return "Watch"
+    if p >= 0.68 and confidence == "High" and upset_risk != "High":
         return "Strong"
     if p >= 0.60:
         return "Medium"
@@ -360,13 +381,13 @@ def apply_pick_strengths(df: pd.DataFrame) -> pd.DataFrame:
     if out.empty:
         return out
     out["winner_strength"] = out.apply(
-        lambda r: pick_strength(r.get("winner_probability"), r.get("confidence")), axis=1
+        lambda r: pick_strength(r.get("winner_probability"), r.get("confidence"), r.get("upset_risk")), axis=1
     )
     out["total_strength"] = out.apply(
-        lambda r: pick_strength(r.get("total_probability"), r.get("confidence")), axis=1
+        lambda r: pick_strength(r.get("total_probability"), r.get("confidence"), r.get("upset_risk")), axis=1
     )
     out["first_set_strength"] = out.apply(
-        lambda r: pick_strength(r.get("first_set_probability"), r.get("confidence")), axis=1
+        lambda r: pick_strength(r.get("first_set_probability"), r.get("confidence"), r.get("upset_risk")), axis=1
     )
     out["best_market"] = out[["winner_probability", "total_probability", "first_set_probability"]].idxmax(axis=1)
     out["best_market"] = out["best_market"].map(
@@ -386,7 +407,7 @@ def apply_pick_strengths(df: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
     out["best_strength"] = out.apply(
-        lambda r: pick_strength(r.get("best_probability"), r.get("confidence")), axis=1
+        lambda r: pick_strength(r.get("best_probability"), r.get("confidence"), r.get("upset_risk")), axis=1
     )
     out["snapshot_time_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
     return out
@@ -411,7 +432,7 @@ def render_mobile_pick_cards(df: pd.DataFrame, limit: int = 8) -> None:
             f"""
 <div class="pick-card">
   <div class="pick-title">{r.get('time_lagos', '')} • {r.get('match', '')}</div>
-  <div class="pick-meta">{r.get('location', '')} • H2H {r.get('h2h_matches', 0)} • Confidence {r.get('confidence', '')}</div>
+  <div class="pick-meta">{r.get('location', '')} • H2H {r.get('h2h_matches', 0)} • Confidence {r.get('confidence', '')} • Upset risk {r.get('upset_risk', '')}</div>
   <div>Best: <b>{r.get('best_market', '')}</b> — <b>{r.get('best_pick', '')}</b> ({r.get('best_probability', 0):.1%}) <span class="{css_class}">{strength}</span></div>
   <div class="pick-meta">Winner: {r.get('winner_pick', '')} {r.get('winner_probability', 0):.1%} • Total: {r.get('total_pick', '')} {r.get('total_probability', 0):.1%} • 1st set: {r.get('first_set_pick', '')} {r.get('first_set_probability', 0):.1%}</div>
 </div>
@@ -516,7 +537,7 @@ if page == "Home":
     with c5:
         st.markdown('<div class="feature-card"><h3>🎟️ Bet Slip Tools</h3><p>Optional odds slip calculator for table-tennis selections: combined odds, payout, and risk level.</p></div>', unsafe_allow_html=True)
     with c6:
-        st.markdown('<div class="feature-card"><h3>🤖 ML Lab</h3><p>Train scikit-learn/XGBoost models on Setka history and compare with transparent rule-blend predictions.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="feature-card"><h3>🎯 Accuracy Lab</h3><p>Backtest recent Setka matches, discover stronger probability filters, and reduce weak picks.</p></div>', unsafe_allow_html=True)
 
     st.info("This app is for analytical decision support. It does not guarantee results and is not financial advice.")
 
@@ -610,6 +631,8 @@ elif page == "Live Predictions":
         "first_set_strength",
         "expected_first_set_points",
         "confidence",
+        "upset_risk",
+        "upset_risk_flags",
         "h2h_matches",
         "match_id",
     ]
@@ -950,6 +973,88 @@ elif page == "Match Predictor":
         st.info("No direct head-to-head matches found in the uploaded history.")
     else:
         st.dataframe(h2h_display_table(pred["h2h_table"]), use_container_width=True)
+
+
+elif page == "Accuracy Lab":
+    st.title("🎯 Accuracy Lab")
+    st.markdown("Time-split backtesting for the Setka rule model. This helps us trust only the best filters instead of every pick.")
+
+    b1, b2, b3, b4 = st.columns(4)
+    with b1:
+        test_rows = st.selectbox("Holdout matches", [250, 500, 750, 1000, 1500], index=2)
+    with b2:
+        bt_first_line = st.number_input("1st set line", 10.5, 35.5, 18.5, 0.5, key="bt_first")
+    with b3:
+        bt_total_line = st.number_input("Total line", 30.5, 140.5, 75.5, 0.5, key="bt_total")
+    with b4:
+        run_bt = st.button("Run backtest", type="primary")
+
+    if not run_bt and "backtest_df" not in st.session_state:
+        st.info("Click Run backtest to test recent historical Setka matches without using those match results for training.")
+        st.stop()
+
+    if run_bt:
+        bt_df, bt_metrics = run_backtest_cached(test_rows, bt_first_line, bt_total_line)
+        st.session_state["backtest_df"] = bt_df
+        st.session_state["backtest_metrics"] = bt_metrics
+    else:
+        bt_df = st.session_state["backtest_df"]
+        bt_metrics = st.session_state["backtest_metrics"]
+
+    if bt_df.empty:
+        st.warning("No backtest rows generated.")
+        st.stop()
+
+    a1, a2, a3, a4 = st.columns(4)
+    a1.metric("Backtest rows", f"{bt_metrics.get('rows', 0):,}")
+    a2.metric("Winner accuracy", format_percent(bt_metrics.get("winner_accuracy")))
+    a3.metric("Total accuracy", format_percent(bt_metrics.get("total_accuracy")))
+    a4.metric("1st-set accuracy", format_percent(bt_metrics.get("first_set_accuracy")))
+
+    st.subheader("Accuracy by probability threshold")
+    th = threshold_table(bt_df)
+    st.dataframe(
+        th.assign(
+            min_probability=th["min_probability"].map(lambda x: f"{x:.0%}"),
+            accuracy=th["accuracy"].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-"),
+        ),
+        use_container_width=True,
+    )
+
+    st.subheader("Recommended live filters from this test")
+    recommendations = []
+    for market, prob_col, correct_col in [
+        ("Winner", "winner_probability", "winner_correct"),
+        ("Total", "total_probability", "total_correct"),
+        ("1st Set", "first_set_probability", "first_set_correct"),
+    ]:
+        best = None
+        for threshold in [0.55, 0.58, 0.60, 0.65, 0.70]:
+            subset = bt_df.loc[bt_df[prob_col] >= threshold]
+            if len(subset) < max(20, len(bt_df) * 0.03):
+                continue
+            acc = subset[correct_col].mean()
+            candidate = (acc, threshold, len(subset))
+            if best is None or candidate[0] > best[0]:
+                best = candidate
+        if best:
+            recommendations.append({"market": market, "recommended_min_probability": best[1], "backtest_accuracy": best[0], "sample_picks": best[2]})
+    rec_df = pd.DataFrame(recommendations)
+    if not rec_df.empty:
+        st.dataframe(
+            rec_df.assign(
+                recommended_min_probability=rec_df["recommended_min_probability"].map(lambda x: f"{x:.0%}"),
+                backtest_accuracy=rec_df["backtest_accuracy"].map(lambda x: f"{x:.1%}"),
+            ),
+            use_container_width=True,
+        )
+
+    st.subheader("Recent backtest rows")
+    view = bt_df.sort_values("date_time", ascending=False).head(250).copy()
+    for col in ["winner_probability", "total_probability", "first_set_probability"]:
+        view[col] = view[col].map(lambda x: f"{x:.1%}")
+    st.dataframe(view, use_container_width=True, height=420)
+    st.download_button("Download backtest CSV", bt_df.to_csv(index=False).encode("utf-8"), "setka_backtest.csv", "text/csv")
 
 
 elif page == "Smart Stake Calc":

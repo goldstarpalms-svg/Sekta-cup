@@ -8,6 +8,8 @@ It includes:
 - live Setka prediction board with confidence filters, pick-strength labels, and mobile cards
 - official Setka results/live-score checker with auto-refresh option
 - automatic grading for saved/uploaded Setka prediction snapshots
+- enhanced winner model with recent H2H, point-difference, set-difference, calibration, and upset-risk flags
+- time-split Accuracy Lab backtesting with recommended probability filters
 - smart stake calculator for table-tennis selections with edge, EV, and safer fractional-Kelly sizing
 - bet slip tools for table-tennis odds, combined payout, risk level, and CSV export
 - transparent rule-blend prediction
@@ -20,8 +22,15 @@ It includes:
 ### Home / Setka dashboard
 
 - Table-tennis-first landing dashboard
-- Quick access to Setka live predictions, Setka results, stake calculator, bet slip tools, ML Lab, player stats, and H2H lookup
+- Quick access to Setka live predictions, Setka results, Accuracy Lab, stake calculator, bet slip tools, player stats, and H2H lookup
 - Focused on Setka Cup only for now
+
+### Accuracy Lab
+
+- Time-split holdout testing of recent Setka matches
+- Winner, total-points, and first-set accuracy
+- Accuracy by probability threshold
+- Recommended live filters to avoid weak picks
 
 ### Smart Stake Calc
 
