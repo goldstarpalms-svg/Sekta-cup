@@ -54,7 +54,6 @@ try:
     )
     from src.source_registry import categories as source_categories
     from src.source_registry import registry_dataframe, summary_by_category
-    from src.sports_config import reference_sites_dataframe, sports_dataframe, supported_sport_names
 
     ODDS_IMPORT_ERROR = None
 except Exception as exc:  # pragma: no cover - shown inside the UI
@@ -155,8 +154,6 @@ with st.sidebar:
         "Go to",
         [
             "Home",
-            "Sports Hub",
-            "Multi-Sport CSV",
             "Live Predictions",
             "Results Checker",
             "Match Predictor",
@@ -491,9 +488,9 @@ if page == "Home":
     st.markdown(
         """
 <div class="hero">
-  <div class="small-muted">🚀 MULTI-SPORT PREDICTION & SAFER STAKING DASHBOARD</div>
-  <h1>Bet smarter with data, not emotions.</h1>
-  <p>Setka Cup predictions are live now. Multi-sport odds, stake calculator, bet slip tools, result checking, and AI-style risk labels are being added step by step.</p>
+  <div class="small-muted">🏓 SETKA CUP TABLE-TENNIS PREDICTION DASHBOARD</div>
+  <h1>Predict Setka smarter with data.</h1>
+  <p>Focused on Setka Cup table tennis: live fixtures, winner picks, total-points, first-set Over/Under 18.5, result checking, player stats, and H2H analysis.</p>
 </div>
 """,
         unsafe_allow_html=True,
@@ -502,180 +499,26 @@ if page == "Home":
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Historical Setka matches", f"{global_stats['match_count']:,}")
     m2.metric("Players tracked", f"{global_stats['player_count']:,}")
-    m3.metric("Sports hub", f"{len(supported_sport_names())} sports")
+    m3.metric("Main sport", "Table Tennis")
     m4.metric("Main timezone", "Lagos")
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.markdown('<div class="feature-card"><h3>🔴 Live Predictions</h3><p>Upcoming official Setka matches with winner, total, first-set O/U, confidence, H2H, and pick-strength labels.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="feature-card"><h3>🔴 Live Setka Predictions</h3><p>Upcoming official Setka matches with winner, total-points, first-set O/U, confidence, H2H, and pick-strength labels.</p></div>', unsafe_allow_html=True)
     with c2:
-        st.markdown('<div class="feature-card"><h3>✅ Result Checker</h3><p>Official scores, set totals, live status, and grading for prediction CSV snapshots.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="feature-card"><h3>✅ Setka Result Checker</h3><p>Official Setka scores, set totals, live status, and grading for prediction CSV snapshots.</p></div>', unsafe_allow_html=True)
     with c3:
-        st.markdown('<div class="feature-card"><h3>🧮 Smart Stake Calc</h3><p>Calculate payout, implied probability, model edge, expected value, and Kelly stake sizing.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="feature-card"><h3>🏓 Table Tennis Predictor</h3><p>Player stats, leaderboard, head-to-head, expected total points, and first-set Over/Under 18.5.</p></div>', unsafe_allow_html=True)
 
     c4, c5, c6 = st.columns(3)
     with c4:
-        st.markdown('<div class="feature-card"><h3>🎟️ Bet Slip Tools</h3><p>Paste decimal odds, estimate combined odds, potential payout, and risk level.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="feature-card"><h3>🧮 Smart Stake Calc</h3><p>Optional table-tennis stake planner with payout, implied probability, model edge, EV, and safer stake sizing.</p></div>', unsafe_allow_html=True)
     with c5:
-        st.markdown('<div class="feature-card"><h3>🌍 Other Sports</h3><p>Football, basketball, tennis, baseball, hockey, and American football are scaffolded for odds/API integration.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="feature-card"><h3>🎟️ Bet Slip Tools</h3><p>Optional odds slip calculator for table-tennis selections: combined odds, payout, and risk level.</p></div>', unsafe_allow_html=True)
     with c6:
-        st.markdown('<div class="feature-card"><h3>🤖 ML Lab</h3><p>Train scikit-learn/XGBoost models and compare them with transparent rule-blend predictions.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="feature-card"><h3>🤖 ML Lab</h3><p>Train scikit-learn/XGBoost models on Setka history and compare with transparent rule-blend predictions.</p></div>', unsafe_allow_html=True)
 
     st.info("This app is for analytical decision support. It does not guarantee results and is not financial advice.")
-
-
-elif page == "Sports Hub":
-    st.title("🌍 Multi-Sport Hub")
-    st.markdown("Setka Cup is active now. Other sports are prepared for odds/API feeds and future model training.")
-    if ODDS_IMPORT_ERROR is not None:
-        st.warning(f"Some odds/source modules could not load: {ODDS_IMPORT_ERROR}")
-    sports_df = sports_dataframe()
-    st.dataframe(sports_df, use_container_width=True, height=330)
-
-    st.subheader("Add a sport workflow")
-    sport = st.selectbox("Sport", sports_df["sport"].tolist())
-    market = st.text_input("Market to model", value="Winner / Moneyline")
-    data_plan = st.text_area(
-        "Data/API plan",
-        value="Use official API, licensed odds feed, CSV upload, or permitted export. Avoid unauthorized scraping.",
-    )
-    if st.button("Create sport roadmap"):
-        st.success(f"Roadmap created for {sport}")
-        st.markdown(
-            f"""
-**{sport} roadmap**
-
-1. Collect permitted fixture/result history.  
-2. Normalize teams/players and leagues.  
-3. Add odds feed mapping for `{market}`.  
-4. Build baseline model from Elo/form/H2H.  
-5. Add ML features and backtesting.  
-6. Connect Results Checker grading.
-
-**Data plan:** {data_plan}
-"""
-        )
-
-    st.subheader("Reference score/result sites you provided")
-    st.caption("These are useful for manual cross-checking. We should only automate them if they provide licensed/API access or permission.")
-    ref_df = reference_sites_dataframe()
-    r1, r2, r3 = st.columns(3)
-    with r1:
-        st.link_button("Open Flashscore", "https://www.flashscore.com/")
-    with r2:
-        st.link_button("Open SofaScore", "https://www.sofascore.com/")
-    with r3:
-        st.link_button("Open BetExplorer", "https://www.betexplorer.com/")
-    st.dataframe(ref_df, use_container_width=True, height=190)
-
-    with st.expander("Manual import plan for these sites", expanded=False):
-        st.markdown(
-            """
-If you export or manually prepare data from these sites, upload it as CSV with columns like:
-
-```text
-date,time,sport,league,home,away,home_score,away_score,status,source
-```
-
-Then we can add a general multi-sport Result Checker and model trainer without breaking site terms.
-            """
-        )
-        sample = pd.DataFrame(
-            [
-                {
-                    "date": "2026-07-25",
-                    "time": "20:00",
-                    "sport": "Football",
-                    "league": "Premier League",
-                    "home": "Team A",
-                    "away": "Team B",
-                    "home_score": 2,
-                    "away_score": 1,
-                    "status": "Finished",
-                    "source": "Manual/CSV",
-                }
-            ]
-        )
-        st.download_button(
-            "Download sample multi-sport CSV template",
-            data=sample.to_csv(index=False).encode("utf-8"),
-            file_name="multi_sport_results_template.csv",
-            mime="text/csv",
-        )
-
-    st.subheader("Odds API quick setup")
-    st.write("For other sports, add `THE_ODDS_API_KEY` in Streamlit secrets, then use the Live Odds page to discover exact sport keys.")
-    st.code('THE_ODDS_API_KEY = "your_key_here"', language="toml")
-
-
-elif page == "Multi-Sport CSV":
-    st.title("📥 Multi-Sport CSV Import")
-    st.markdown("Upload manually prepared or permitted-export data from any sport/site and get quick stats. This avoids unsafe scraping.")
-    st.info("Recommended columns: date, time, sport, league, home, away, home_score, away_score, status, source")
-
-    uploaded = st.file_uploader("Upload multi-sport results CSV", type=["csv"], key="multi_sport_csv")
-    if uploaded is None:
-        template = pd.DataFrame(
-            [
-                {
-                    "date": "2026-07-25",
-                    "time": "20:00",
-                    "sport": "Football",
-                    "league": "Premier League",
-                    "home": "Team A",
-                    "away": "Team B",
-                    "home_score": 2,
-                    "away_score": 1,
-                    "status": "Finished",
-                    "source": "Manual/CSV",
-                }
-            ]
-        )
-        st.download_button("Download CSV template", template.to_csv(index=False).encode("utf-8"), "multi_sport_results_template.csv", "text/csv")
-        st.stop()
-
-    try:
-        ms_df = pd.read_csv(uploaded)
-    except Exception as exc:
-        st.exception(exc)
-        st.stop()
-
-    st.success(f"Loaded {len(ms_df):,} rows")
-    st.dataframe(ms_df.head(500), use_container_width=True, height=360)
-
-    lower_cols = {c.lower(): c for c in ms_df.columns}
-    sport_col = lower_cols.get("sport")
-    league_col = lower_cols.get("league")
-    home_score_col = lower_cols.get("home_score")
-    away_score_col = lower_cols.get("away_score")
-
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Rows", f"{len(ms_df):,}")
-    k2.metric("Sports", f"{ms_df[sport_col].nunique():,}" if sport_col else "-")
-    k3.metric("Leagues", f"{ms_df[league_col].nunique():,}" if league_col else "-")
-    k4.metric("Columns", f"{len(ms_df.columns):,}")
-
-    if sport_col:
-        st.subheader("Rows by sport")
-        sport_counts = ms_df[sport_col].value_counts().reset_index()
-        sport_counts.columns = ["sport", "rows"]
-        st.plotly_chart(px.bar(sport_counts, x="sport", y="rows", title="Uploaded rows by sport"), use_container_width=True)
-
-    if home_score_col and away_score_col:
-        scores = ms_df.copy()
-        scores[home_score_col] = pd.to_numeric(scores[home_score_col], errors="coerce")
-        scores[away_score_col] = pd.to_numeric(scores[away_score_col], errors="coerce")
-        scores["total_goals_points"] = scores[home_score_col] + scores[away_score_col]
-        st.subheader("Score totals")
-        st.plotly_chart(px.histogram(scores, x="total_goals_points", nbins=25, title="Total goals/points distribution"), use_container_width=True)
-        st.metric("Average total goals/points", format_number(scores["total_goals_points"].mean(), 2))
-
-    st.download_button(
-        "Download cleaned uploaded CSV",
-        data=ms_df.to_csv(index=False).encode("utf-8"),
-        file_name="multi_sport_uploaded_clean.csv",
-        mime="text/csv",
-    )
 
 
 elif page == "Live Predictions":

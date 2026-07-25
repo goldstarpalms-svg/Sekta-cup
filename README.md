@@ -4,40 +4,24 @@ Interactive Streamlit app for Setka Cup/table-tennis analysis, built from the up
 
 It includes:
 
-- SaferStake-inspired multi-sport dashboard structure
 - official Setka upcoming-match feed integration
-- live prediction board with confidence filters, pick-strength labels, and mobile cards
+- live Setka prediction board with confidence filters, pick-strength labels, and mobile cards
 - official Setka results/live-score checker with auto-refresh option
-- automatic grading for saved/uploaded prediction snapshots
-- multi-sport hub for football, basketball, tennis, baseball, hockey, and American football scaffolds
-- reference links for Flashscore, SofaScore, and BetExplorer with a compliant manual-import plan
-- multi-sport CSV import page for permitted exports/manual data
-- smart stake calculator with edge, EV, and safer fractional-Kelly sizing
-- bet slip tools for combined odds, payout, risk level, and CSV export
+- automatic grading for saved/uploaded Setka prediction snapshots
+- smart stake calculator for table-tennis selections with edge, EV, and safer fractional-Kelly sizing
+- bet slip tools for table-tennis odds, combined payout, risk level, and CSV export
 - transparent rule-blend prediction
 - optional scikit-learn/XGBoost ML training
-- live odds/API integration scaffolds
-- a data-source/research registry for the resources collected during planning
+- odds/API integration scaffolds for future table-tennis odds
+- a data-source/research registry for Setka/table-tennis resources collected during planning
 
 ## Main features
 
-### Home / Multi-sport dashboard
+### Home / Setka dashboard
 
-- Landing dashboard inspired by safer staking tools
-- Quick access to live predictions, results, stake calculator, bet slip tools, ML Lab, and sports hub
-- Multi-sport structure without copying any third-party brand or proprietary design
-
-### Sports Hub
-
-- Setka Cup active now
-- Football, basketball, tennis, baseball, ice hockey, and American football scaffolds
-- Roadmap generator for adding each new sport with permitted data/API feeds
-
-### Multi-Sport CSV Import
-
-- Upload permitted/manual CSV exports from any sport
-- Quick sport/league counts and score-total distribution
-- CSV template download for football, basketball, tennis, and other sports
+- Table-tennis-first landing dashboard
+- Quick access to Setka live predictions, Setka results, stake calculator, bet slip tools, ML Lab, player stats, and H2H lookup
+- Focused on Setka Cup only for now
 
 ### Smart Stake Calc
 
@@ -48,7 +32,7 @@ It includes:
 
 ### Bet Slip Tools
 
-- Paste multiple decimal odds
+- Paste multiple decimal odds for table-tennis selections
 - Calculate combined odds, implied probability, payout, and risk level
 - Simple split-stake planning and CSV export
 
@@ -106,8 +90,8 @@ The app can use:
 
 Prepared integration for [The Odds API](https://the-odds-api.com/):
 
-- list available sports for your API key
-- fetch odds for a chosen sport key
+- list available odds sports/markets for your API key
+- fetch odds for a chosen table-tennis/sport key
 - flatten bookmaker/market/outcome odds into a table
 - calculate implied probabilities for decimal or American odds
 - export odds to CSV
@@ -187,7 +171,6 @@ setka-prediction-app/
     ├── odds_api.py
     ├── setka_core.py
     ├── setka_live.py
-    ├── sports_config.py
     └── source_registry.py
 ```
 
