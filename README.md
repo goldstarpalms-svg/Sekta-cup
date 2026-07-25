@@ -5,9 +5,9 @@ Interactive Streamlit app for Setka Cup/table-tennis analysis, built from the up
 It includes:
 
 - official Setka upcoming-match feed integration
-- live prediction board with confidence filters
-- official Setka results/live-score checker
-- automatic grading for saved prediction snapshots
+- live prediction board with confidence filters, pick-strength labels, and mobile cards
+- official Setka results/live-score checker with auto-refresh option
+- automatic grading for saved/uploaded prediction snapshots
 - transparent rule-blend prediction
 - optional scikit-learn/XGBoost ML training
 - live odds/API integration scaffolds
@@ -21,7 +21,7 @@ It includes:
 - Converts match times to Lagos time
 - Produces winner, total-points, and first-set Over/Under predictions
 - Adds confidence, H2H count, expected total points, and expected first-set points
-- Includes filters to hide weak picks and CSV export
+- Includes filters to hide weak picks, CSV export, browser-session snapshots, and mobile-friendly pick cards
 
 ### Results Checker
 
@@ -29,6 +29,7 @@ It includes:
 - Shows scheduled, live, and finished matches
 - Calculates set-score text, first-set total, and match total points
 - Grades stored prediction snapshots against actual results
+- Can upload a downloaded prediction CSV and grade it against official results
 
 ### Match Predictor
 

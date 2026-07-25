@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 from src.setka_core import (
     build_context,
@@ -80,6 +81,19 @@ CUSTOM_CSS = """
 .good { color: #22C55E; font-weight: 700; }
 .warn { color: #F59E0B; font-weight: 700; }
 .bad { color: #EF4444; font-weight: 700; }
+.pick-card {
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 18px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.8rem;
+    background: linear-gradient(135deg, rgba(15, 23, 42, 0.78), rgba(30, 41, 59, 0.42));
+}
+.pick-title { font-size: 1rem; font-weight: 800; margin-bottom: 0.25rem; }
+.pick-meta { color: #94A3B8; font-size: 0.85rem; margin-bottom: 0.55rem; }
+.badge-strong { color: #22C55E; font-weight: 900; }
+.badge-medium { color: #F59E0B; font-weight: 900; }
+.badge-watch { color: #38BDF8; font-weight: 900; }
+.badge-avoid { color: #EF4444; font-weight: 900; }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -297,15 +311,105 @@ def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line
     }
 
 
+def pick_strength(probability: float | None, confidence: str | None = None) -> str:
+    if probability is None or pd.isna(probability):
+        return "Avoid"
+    p = float(probability)
+    confidence = confidence or ""
+    if p >= 0.68 and confidence == "High":
+        return "Strong"
+    if p >= 0.60:
+        return "Medium"
+    if p >= 0.55:
+        return "Watch"
+    return "Avoid"
+
+
+def strength_class(strength: str) -> str:
+    return {
+        "Strong": "badge-strong",
+        "Medium": "badge-medium",
+        "Watch": "badge-watch",
+        "Avoid": "badge-avoid",
+    }.get(strength, "badge-avoid")
+
+
+def apply_pick_strengths(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if out.empty:
+        return out
+    out["winner_strength"] = out.apply(
+        lambda r: pick_strength(r.get("winner_probability"), r.get("confidence")), axis=1
+    )
+    out["total_strength"] = out.apply(
+        lambda r: pick_strength(r.get("total_probability"), r.get("confidence")), axis=1
+    )
+    out["first_set_strength"] = out.apply(
+        lambda r: pick_strength(r.get("first_set_probability"), r.get("confidence")), axis=1
+    )
+    out["best_market"] = out[["winner_probability", "total_probability", "first_set_probability"]].idxmax(axis=1)
+    out["best_market"] = out["best_market"].map(
+        {
+            "winner_probability": "Winner",
+            "total_probability": "Total",
+            "first_set_probability": "1st Set",
+        }
+    )
+    out["best_probability"] = out[["winner_probability", "total_probability", "first_set_probability"]].max(axis=1)
+    out["best_pick"] = out.apply(
+        lambda r: r["winner_pick"]
+        if r["best_market"] == "Winner"
+        else f"{r['total_pick']} total"
+        if r["best_market"] == "Total"
+        else f"{r['first_set_pick']} 1st set",
+        axis=1,
+    )
+    out["best_strength"] = out.apply(
+        lambda r: pick_strength(r.get("best_probability"), r.get("confidence")), axis=1
+    )
+    out["snapshot_time_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
+    return out
+
+
 def format_prediction_table(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    for col in ["winner_probability", "total_probability", "first_set_probability"]:
+    for col in ["winner_probability", "total_probability", "first_set_probability", "best_probability"]:
         if col in out:
             out[col] = out[col].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
     for col in ["expected_total_points", "expected_first_set_points", "confidence_score"]:
         if col in out:
             out[col] = out[col].map(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
     return out
+
+
+def render_mobile_pick_cards(df: pd.DataFrame, limit: int = 8) -> None:
+    for _, r in df.head(limit).iterrows():
+        strength = r.get("best_strength", "Avoid")
+        css_class = strength_class(strength)
+        st.markdown(
+            f"""
+<div class="pick-card">
+  <div class="pick-title">{r.get('time_lagos', '')} • {r.get('match', '')}</div>
+  <div class="pick-meta">{r.get('location', '')} • H2H {r.get('h2h_matches', 0)} • Confidence {r.get('confidence', '')}</div>
+  <div>Best: <b>{r.get('best_market', '')}</b> — <b>{r.get('best_pick', '')}</b> ({r.get('best_probability', 0):.1%}) <span class="{css_class}">{strength}</span></div>
+  <div class="pick-meta">Winner: {r.get('winner_pick', '')} {r.get('winner_probability', 0):.1%} • Total: {r.get('total_pick', '')} {r.get('total_probability', 0):.1%} • 1st set: {r.get('first_set_pick', '')} {r.get('first_set_probability', 0):.1%}</div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+
+def enable_browser_auto_refresh(seconds: int) -> None:
+    if seconds <= 0:
+        return
+    components.html(
+        f"""
+<script>
+  setTimeout(function() {{ window.parent.location.reload(); }}, {int(seconds) * 1000});
+</script>
+""",
+        height=0,
+    )
 
 
 FORMER_PREDICTIONS = {
@@ -340,10 +444,15 @@ if page == "Live Predictions":
         st.divider()
         st.caption("Live prediction filters")
         live_limit = st.slider("Upcoming matches to read", 5, 50, 20, 5)
-        min_winner = st.slider("Min winner probability", 50, 90, 50, 1) / 100
-        min_total = st.slider("Min total-points probability", 50, 80, 50, 1) / 100
-        min_first = st.slider("Min first-set probability", 50, 80, 50, 1) / 100
-        show_only_strong = st.checkbox("Show only picks passing all filters", value=False)
+        min_winner = st.slider("Min winner probability", 50, 90, 55, 1) / 100
+        min_total = st.slider("Min total-points probability", 50, 80, 56, 1) / 100
+        min_first = st.slider("Min first-set probability", 50, 80, 55, 1) / 100
+        show_only_strong = st.checkbox("Show only picks passing filters", value=False)
+        auto_refresh = st.checkbox("Auto-refresh page", value=False)
+        refresh_seconds = st.selectbox("Refresh every", [15, 30, 60, 120], index=1)
+
+    if auto_refresh:
+        enable_browser_auto_refresh(refresh_seconds)
 
     c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
     with c1:
@@ -367,7 +476,7 @@ if page == "Live Predictions":
     for _, match_row in upcoming.iterrows():
         if match_row.get("player1") and match_row.get("player2"):
             rows.append(prediction_pick_row(match_row, first_set_line, total_points_line))
-    pred_df = pd.DataFrame(rows)
+    pred_df = apply_pick_strengths(pd.DataFrame(rows))
 
     if pred_df.empty:
         st.warning("No upcoming official Setka matches returned right now.")
@@ -377,39 +486,69 @@ if page == "Live Predictions":
     if show_only_strong:
         filtered = filtered.loc[
             (filtered["winner_probability"] >= min_winner)
-            & (filtered["total_probability"] >= min_total)
-            & (filtered["first_set_probability"] >= min_first)
+            | (filtered["total_probability"] >= min_total)
+            | (filtered["first_set_probability"] >= min_first)
         ]
 
-    top_cols = st.columns(4)
+    top_cols = st.columns(5)
     top_cols[0].metric("Official matches", f"{len(upcoming):,}")
     top_cols[1].metric("Shown after filter", f"{len(filtered):,}")
-    top_cols[2].metric("High confidence", f"{(pred_df['confidence'] == 'High').sum():,}")
-    top_cols[3].metric("Avg H2H", f"{pred_df['h2h_matches'].mean():.1f}")
+    top_cols[2].metric("Strong best picks", f"{(pred_df['best_strength'] == 'Strong').sum():,}")
+    top_cols[3].metric("High confidence", f"{(pred_df['confidence'] == 'High').sum():,}")
+    top_cols[4].metric("Avg H2H", f"{pred_df['h2h_matches'].mean():.1f}")
+
+    st.subheader("Best picks cards")
+    best_cards = filtered.sort_values(["best_probability", "winner_probability"], ascending=False)
+    render_mobile_pick_cards(best_cards, limit=8)
 
     display_cols = [
         "time_lagos",
         "location",
         "match",
+        "best_market",
+        "best_pick",
+        "best_probability",
+        "best_strength",
         "winner_pick",
         "winner_probability",
+        "winner_strength",
         "total_pick",
         "total_probability",
+        "total_strength",
         "expected_total_points",
         "first_set_pick",
         "first_set_probability",
+        "first_set_strength",
         "expected_first_set_points",
         "confidence",
         "h2h_matches",
         "match_id",
     ]
+    st.subheader("Full live prediction board")
     st.dataframe(format_prediction_table(filtered[display_cols]), use_container_width=True, height=560)
-    st.download_button(
-        "Download live predictions CSV",
-        data=pred_df.to_csv(index=False).encode("utf-8"),
-        file_name="setka_live_predictions.csv",
-        mime="text/csv",
-    )
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button(
+            "Download live predictions CSV",
+            data=pred_df.to_csv(index=False).encode("utf-8"),
+            file_name="setka_live_predictions.csv",
+            mime="text/csv",
+        )
+    with dl2:
+        if st.button("Save snapshot in this session"):
+            old = st.session_state.get("prediction_snapshots", pd.DataFrame())
+            st.session_state["prediction_snapshots"] = pd.concat([old, pred_df], ignore_index=True)
+            st.success(f"Saved {len(pred_df)} rows in this browser session.")
+
+    if "prediction_snapshots" in st.session_state and not st.session_state["prediction_snapshots"].empty:
+        with st.expander("Session prediction snapshots", expanded=False):
+            st.dataframe(format_prediction_table(st.session_state["prediction_snapshots"].tail(100)), use_container_width=True)
+            st.download_button(
+                "Download session snapshots CSV",
+                data=st.session_state["prediction_snapshots"].to_csv(index=False).encode("utf-8"),
+                file_name="setka_prediction_snapshots.csv",
+                mime="text/csv",
+            )
 
     s1, s2, s3 = st.columns(3)
     with s1:
@@ -441,6 +580,14 @@ elif page == "Results Checker":
     if ODDS_IMPORT_ERROR is not None:
         st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
         st.stop()
+
+    with st.sidebar:
+        st.divider()
+        st.caption("Results refresh")
+        results_auto_refresh = st.checkbox("Auto-refresh results page", value=False)
+        results_refresh_seconds = st.selectbox("Results refresh every", [15, 30, 60, 120], index=1)
+    if results_auto_refresh:
+        enable_browser_auto_refresh(results_refresh_seconds)
 
     today_lagos = pd.Timestamp.now(tz="Africa/Lagos").date()
     c1, c2, c3 = st.columns([1, 1, 1.4])
@@ -530,8 +677,69 @@ elif page == "Results Checker":
             a2.metric("Total accuracy", format_percent(total_acc))
             a3.metric("1st-set accuracy", format_percent(first_acc))
 
+    with st.expander("Upload and grade your prediction CSV", expanded=False):
+        st.caption("Upload a CSV downloaded from Live Predictions. It must include match_id, winner_pick, total_pick, and first_set_pick columns.")
+        uploaded_predictions = st.file_uploader("Prediction CSV", type=["csv"], key="grade_prediction_csv")
+        if uploaded_predictions is not None:
+            try:
+                user_preds = pd.read_csv(uploaded_predictions)
+                needed = {"match_id", "winner_pick", "total_pick", "first_set_pick"}
+                missing = needed - set(user_preds.columns)
+                if missing:
+                    st.error(f"Missing columns: {', '.join(sorted(missing))}")
+                else:
+                    result_for_merge = result_df.copy()
+                    result_for_merge["actual_match"] = result_for_merge["player1"] + " vs " + result_for_merge["player2"]
+                    if "start_time_lagos" in result_for_merge.columns:
+                        result_for_merge = result_for_merge.rename(columns={"start_time_lagos": "actual_time_lagos"})
+                    merged = user_preds.merge(
+                        result_for_merge,
+                        on="match_id",
+                        how="left",
+                        suffixes=("_pred", "_actual"),
+                    )
+                    merged["actual_total_pick"] = merged["total_points"].map(
+                        lambda x: "Over" if pd.notna(x) and x > 75.5 else "Under" if pd.notna(x) else None
+                    )
+                    merged["actual_first_set_pick"] = merged["first_set_total"].map(
+                        lambda x: "Over" if pd.notna(x) and x > 18.5 else "Under" if pd.notna(x) else None
+                    )
+                    merged["winner_grade"] = merged.apply(lambda r: grade_pick(r.get("winner_pick"), r.get("winner")), axis=1)
+                    merged["total_grade"] = merged.apply(lambda r: grade_pick(r.get("total_pick"), r.get("actual_total_pick")), axis=1)
+                    merged["first_set_grade"] = merged.apply(lambda r: grade_pick(r.get("first_set_pick"), r.get("actual_first_set_pick")), axis=1)
+                    out_cols = [
+                        "match_id",
+                        "time_lagos",
+                        "actual_time_lagos",
+                        "location_pred",
+                        "location_actual",
+                        "match",
+                        "actual_match",
+                        "status",
+                        "winner_pick",
+                        "winner",
+                        "winner_grade",
+                        "total_pick",
+                        "actual_total_pick",
+                        "total_points",
+                        "total_grade",
+                        "first_set_pick",
+                        "actual_first_set_pick",
+                        "first_set_total",
+                        "first_set_grade",
+                    ]
+                    st.dataframe(merged[[c for c in out_cols if c in merged.columns]], use_container_width=True)
+                    finished_upload = merged.loc[merged["winner"].notna()]
+                    if not finished_upload.empty:
+                        u1, u2, u3 = st.columns(3)
+                        u1.metric("Winner accuracy", format_percent((finished_upload["winner_grade"] == "✅").mean()))
+                        u2.metric("Total accuracy", format_percent((finished_upload["total_grade"] == "✅").mean()))
+                        u3.metric("1st-set accuracy", format_percent((finished_upload["first_set_grade"] == "✅").mean()))
+            except Exception as exc:
+                st.exception(exc)
 
-elif page == "Match Predictor":
+
+elif page == "Match Predictor": 
     st.title("🏓 Match Predictor")
     st.markdown(
         "Estimate match winner, expected total points, and **first set Over/Under 18.5** from the Setka history."
@@ -600,6 +808,39 @@ elif page == "Match Predictor":
         f"Total Under {total_points_line}",
         format_percent(pred["total_points_under_probability"]),
     )
+
+    total_pick = "Over" if pred["total_points_over_probability"] >= pred["total_points_under_probability"] else "Under"
+    total_prob = max(pred["total_points_over_probability"], pred["total_points_under_probability"])
+    first_pick = "Over" if pred["first_set_over_probability"] >= pred["first_set_under_probability"] else "Under"
+    first_prob = max(pred["first_set_over_probability"], pred["first_set_under_probability"])
+    winner_prob = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
+    st.info(
+        f"Pick strength → Winner: {pick_strength(winner_prob, pred['confidence'])} | "
+        f"Total: {total_pick} {pick_strength(total_prob, pred['confidence'])} | "
+        f"1st set: {first_pick} {pick_strength(first_prob, pred['confidence'])}"
+    )
+
+    with st.expander("Manual odds value check", expanded=False):
+        st.caption("Optional: compare your model probability with bookmaker decimal odds. Positive edge means model probability is higher than implied probability.")
+        odds_market = st.selectbox("Market", ["Winner", "Total", "1st Set"], key="manual_odds_market")
+        if odds_market == "Winner":
+            model_probability = winner_prob
+            model_pick = pred["predicted_winner"]
+        elif odds_market == "Total":
+            model_probability = total_prob
+            model_pick = total_pick
+        else:
+            model_probability = first_prob
+            model_pick = first_pick
+        decimal_odds = st.number_input("Decimal odds", min_value=1.01, max_value=50.0, value=1.80, step=0.01)
+        implied_probability = 1 / decimal_odds
+        edge = model_probability - implied_probability
+        ev = (model_probability * decimal_odds) - 1
+        o1, o2, o3, o4 = st.columns(4)
+        o1.metric("Model pick", model_pick)
+        o2.metric("Model probability", format_percent(model_probability))
+        o3.metric("Implied probability", format_percent(implied_probability))
+        o4.metric("Estimated edge", format_percent(edge), delta=format_percent(ev))
 
     with st.expander("Why this prediction?", expanded=True):
         d1, d2, d3, d4 = st.columns(4)
