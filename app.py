@@ -638,6 +638,48 @@ def expand_setka_result_dates(date_texts: list[str]) -> list[str]:
     return sorted(dates)
 
 
+def tracker_result_dates(track: pd.DataFrame, manual_date) -> list[str]:
+    """Build a robust official Setka date search window for saved picks."""
+    seeds: list[str] = [str(manual_date), pd.Timestamp.now(tz="Africa/Lagos").date().isoformat()]
+    for col in ["date_lagos", "saved_at_lagos"]:
+        if col in track.columns:
+            parsed = pd.to_datetime(track[col], errors="coerce").dropna()
+            seeds.extend([x.date().isoformat() for x in parsed.tolist()])
+    dates: set[str] = set()
+    for seed in seeds:
+        dt = pd.to_datetime(seed, errors="coerce")
+        if pd.isna(dt):
+            continue
+        base = dt.date()
+        # Wider than before because Setka night events can sit on adjacent official days.
+        for offset in range(-3, 4):
+            dates.add((pd.Timestamp(base) + pd.Timedelta(days=offset)).date().isoformat())
+    return sorted(dates)
+
+
+def fetch_tracker_results(track: pd.DataFrame, manual_date) -> pd.DataFrame:
+    dates = tracker_result_dates(track, manual_date)
+    result_df = sync_official_results_for_dates(dates)
+    # Add the current live widget too; it often contains just-finished/live rows before tournament endpoint catches up.
+    try:
+        live_now = load_official_live()
+        if live_now is not None and not live_now.empty:
+            live_now = live_now.copy()
+            live_now["synced_at_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
+            result_df = pd.concat([result_df, live_now], ignore_index=True) if not result_df.empty else live_now
+            save_daily_results(live_now)
+    except Exception:
+        pass
+    if result_df is None or result_df.empty:
+        return pd.DataFrame()
+    if "match_id" in result_df.columns:
+        result_df["match_id"] = pd.to_numeric(result_df["match_id"], errors="coerce")
+        result_df = result_df.dropna(subset=["match_id"])
+        result_df["match_id"] = result_df["match_id"].astype("int64")
+        result_df = result_df.drop_duplicates(subset=["match_id"], keep="last")
+    return result_df
+
+
 def sync_official_results_for_dates(date_texts: list[str]) -> pd.DataFrame:
     """Fetch official Setka results for dates and persist them for future grading/training export."""
     frames = []
@@ -1272,22 +1314,23 @@ elif page == "Strong Pick Tracker":
     if "match_id" in track.columns:
         track["match_id"] = pd.to_numeric(track["match_id"], errors="coerce")
 
-    dates_to_check: list[str] = []
-    if auto_check_dates and "date_lagos" in track.columns:
-        parsed_dates = pd.to_datetime(track["date_lagos"], errors="coerce").dt.date.dropna().unique().tolist()
-        dates_to_check = [d.isoformat() for d in parsed_dates][-10:]
-    if not dates_to_check:
-        dates_to_check = [str(track_date)]
-    dates_to_check = expand_setka_result_dates(dates_to_check)
+    dates_to_check = tracker_result_dates(track, track_date) if auto_check_dates else expand_setka_result_dates([str(track_date)])
 
-    result_df = sync_official_results_for_dates(dates_to_check)
+    result_df = fetch_tracker_results(track, track_date) if auto_check_dates else sync_official_results_for_dates(dates_to_check)
     if result_df.empty:
         st.warning("No official results returned yet for the saved pick dates.")
         st.stop()
-    if "start_date_lagos" in result_df.columns:
-        result_df = result_df.loc[result_df["start_date_lagos"].astype(str).isin([str(d) for d in dates_to_check]) | result_df["match_id"].isin(track.get("match_id", pd.Series(dtype=float)))]
+
+    if "match_id" in track.columns:
+        track["match_id"] = pd.to_numeric(track["match_id"], errors="coerce")
+        track = track.dropna(subset=["match_id"]).copy()
+        track["match_id"] = track["match_id"].astype("int64")
 
     result_for_merge = result_df.copy()
+    if "match_id" in result_for_merge.columns:
+        result_for_merge["match_id"] = pd.to_numeric(result_for_merge["match_id"], errors="coerce")
+        result_for_merge = result_for_merge.dropna(subset=["match_id"]).copy()
+        result_for_merge["match_id"] = result_for_merge["match_id"].astype("int64")
     result_for_merge["actual_match"] = result_for_merge["player1"] + " vs " + result_for_merge["player2"]
     merged = track.merge(result_for_merge, on="match_id", how="left", suffixes=("_pick", "_result"))
 
@@ -1307,9 +1350,14 @@ elif page == "Strong Pick Tracker":
     m3.metric("Lost", f"{losses:,}")
     m4.metric("Pending", f"{pending:,}")
     m5.metric("Strong-pick accuracy", format_percent(accuracy) if accuracy is not None else "-")
-    st.caption(f"Auto-checked official Setka result date(s): {', '.join(dates_to_check)}")
+    matched_count = int(merged["status"].notna().sum()) if "status" in merged.columns else 0
+    st.caption(f"Auto-checked official Setka result date(s): {', '.join(dates_to_check)} | Result rows found: {len(result_df):,} | Matched tracked picks: {matched_count:,}")
     if pending:
-        st.info("Pending means the match has not finished yet, or the official result has not appeared in the Setka feed for the checked dates.")
+        st.info("Pending means the match has not finished yet, or the official result has not appeared in the Setka feed. The tracker now checks a wider ±3 day Setka window plus the live widget.")
+        unmatched = merged.loc[merged.get("status", pd.Series(index=merged.index)).isna(), [c for c in ["match_id", "time_lagos", "match", "best_market", "best_pick", "date_lagos"] if c in merged.columns]]
+        if not unmatched.empty:
+            with st.expander("Debug: unmatched saved picks", expanded=False):
+                st.dataframe(unmatched, use_container_width=True)
 
     st.subheader("Strong pick results")
     cols = [
