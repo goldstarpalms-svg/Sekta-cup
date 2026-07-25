@@ -39,7 +39,17 @@ try:
         list_sports,
         normalize_odds_events,
     )
-    from src.setka_live import OFFICIAL_SETKA_URL, fetch_official_site_status, status_as_dict
+    from src.setka_live import (
+        OFFICIAL_SETKA_URL,
+        add_lagos_time,
+        add_location_names,
+        fetch_live_matches,
+        fetch_nearest_matches,
+        fetch_official_site_status,
+        fetch_results_for_date,
+        location_map,
+        status_as_dict,
+    )
     from src.source_registry import categories as source_categories
     from src.source_registry import registry_dataframe, summary_by_category
 
@@ -111,6 +121,8 @@ with st.sidebar:
     page = st.radio(
         "Go to",
         [
+            "Live Predictions",
+            "Results Checker",
             "Match Predictor",
             "ML Lab",
             "Live Odds",
@@ -221,7 +233,305 @@ def player_latest_table(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
     return out
 
 
-if page == "Match Predictor":
+@st.cache_data(ttl=30, show_spinner="Fetching official Setka upcoming matches...")
+def load_official_nearest() -> pd.DataFrame:
+    locs = location_map()
+    frame = fetch_nearest_matches()
+    frame = add_lagos_time(frame)
+    frame = add_location_names(frame, locs)
+    return frame
+
+
+@st.cache_data(ttl=15, show_spinner="Fetching official Setka live matches...")
+def load_official_live() -> pd.DataFrame:
+    locs = location_map()
+    frame = fetch_live_matches()
+    frame = add_lagos_time(frame)
+    frame = add_location_names(frame, locs)
+    return frame
+
+
+@st.cache_data(ttl=45, show_spinner="Fetching official Setka results...")
+def load_official_results(match_date: str, day_period: int | None) -> pd.DataFrame:
+    locs = location_map()
+    frame = fetch_results_for_date(match_date, day_period=day_period)
+    frame = add_lagos_time(frame)
+    frame = add_location_names(frame, locs)
+    return frame
+
+
+def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line: float) -> dict:
+    pred = predict_match(
+        row["player1"],
+        row["player2"],
+        player_stats,
+        matches,
+        global_stats,
+        first_set_line=first_set_line,
+        total_points_line=total_points_line,
+    )
+    winner_prob = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
+    total_pick = "Over" if pred["total_points_over_probability"] >= pred["total_points_under_probability"] else "Under"
+    total_prob = max(pred["total_points_over_probability"], pred["total_points_under_probability"])
+    first_pick = "Over" if pred["first_set_over_probability"] >= pred["first_set_under_probability"] else "Under"
+    first_prob = max(pred["first_set_over_probability"], pred["first_set_under_probability"])
+    return {
+        "match_id": row.get("match_id"),
+        "time_lagos": row.get("start_time_lagos"),
+        "date_lagos": row.get("start_date_lagos"),
+        "location": row.get("location"),
+        "match": f"{row['player1']} vs {row['player2']}",
+        "player1": row["player1"],
+        "player2": row["player2"],
+        "winner_pick": pred["predicted_winner"],
+        "winner_probability": winner_prob,
+        "total_pick": total_pick,
+        "total_probability": total_prob,
+        "expected_total_points": pred["expected_total_points"],
+        "first_set_pick": first_pick,
+        "first_set_probability": first_prob,
+        "expected_first_set_points": pred["expected_first_set_points"],
+        "confidence": pred["confidence"],
+        "confidence_score": pred["confidence_score"],
+        "h2h_matches": pred["h2h_matches"],
+    }
+
+
+def format_prediction_table(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    for col in ["winner_probability", "total_probability", "first_set_probability"]:
+        if col in out:
+            out[col] = out[col].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+    for col in ["expected_total_points", "expected_first_set_points", "confidence_score"]:
+        if col in out:
+            out[col] = out[col].map(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
+    return out
+
+
+FORMER_PREDICTIONS = {
+    804491: {"winner_pick": "Dmitri Gribcov", "total_pick": "Over", "first_set_pick": "Over"},
+    804612: {"winner_pick": "Orest Hura", "total_pick": "Over", "first_set_pick": "Over"},
+    804655: {"winner_pick": "Yan Krol", "total_pick": "Over", "first_set_pick": "Over"},
+    804627: {"winner_pick": "Oleh Lutsyshyn", "total_pick": "Under", "first_set_pick": "Over"},
+    804640: {"winner_pick": "Yevhen Kryvorotko", "total_pick": "Under", "first_set_pick": "Under"},
+    804492: {"winner_pick": "Mihail Filip", "total_pick": "Under", "first_set_pick": "Over"},
+    804613: {"winner_pick": "Anton Shypilov", "total_pick": "Over", "first_set_pick": "Over"},
+    804656: {"winner_pick": "Vitalii Khamurda", "total_pick": "Over", "first_set_pick": "Over"},
+    804628: {"winner_pick": "Serhii Prus", "total_pick": "Under", "first_set_pick": "Over"},
+    804641: {"winner_pick": "Serhei Hohenko", "total_pick": "Under", "first_set_pick": "Over"},
+}
+
+
+def grade_pick(prediction: str | None, actual: str | None) -> str:
+    if not prediction or not actual:
+        return "Pending"
+    return "✅" if str(prediction).strip() == str(actual).strip() else "❌"
+
+
+if page == "Live Predictions":
+    st.title("🔴 Live Setka Predictions")
+    st.markdown("Fetch upcoming matches from the official Setka API and generate winner, total-points, and first-set picks in Lagos time.")
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    with st.sidebar:
+        st.divider()
+        st.caption("Live prediction filters")
+        live_limit = st.slider("Upcoming matches to read", 5, 50, 20, 5)
+        min_winner = st.slider("Min winner probability", 50, 90, 50, 1) / 100
+        min_total = st.slider("Min total-points probability", 50, 80, 50, 1) / 100
+        min_first = st.slider("Min first-set probability", 50, 80, 50, 1) / 100
+        show_only_strong = st.checkbox("Show only picks passing all filters", value=False)
+
+    c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
+    with c1:
+        first_set_line = st.number_input("1st set line", 10.5, 35.5, 18.5, 0.5, key="live_first")
+    with c2:
+        total_points_line = st.number_input("Total points line", 30.5, 140.5, 75.5, 0.5, key="live_total")
+    with c3:
+        if st.button("Refresh official feed", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+    with c4:
+        st.caption("Cache refreshes automatically every 30 seconds.")
+
+    try:
+        upcoming = load_official_nearest().head(live_limit)
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    rows = []
+    for _, match_row in upcoming.iterrows():
+        if match_row.get("player1") and match_row.get("player2"):
+            rows.append(prediction_pick_row(match_row, first_set_line, total_points_line))
+    pred_df = pd.DataFrame(rows)
+
+    if pred_df.empty:
+        st.warning("No upcoming official Setka matches returned right now.")
+        st.stop()
+
+    filtered = pred_df.copy()
+    if show_only_strong:
+        filtered = filtered.loc[
+            (filtered["winner_probability"] >= min_winner)
+            & (filtered["total_probability"] >= min_total)
+            & (filtered["first_set_probability"] >= min_first)
+        ]
+
+    top_cols = st.columns(4)
+    top_cols[0].metric("Official matches", f"{len(upcoming):,}")
+    top_cols[1].metric("Shown after filter", f"{len(filtered):,}")
+    top_cols[2].metric("High confidence", f"{(pred_df['confidence'] == 'High').sum():,}")
+    top_cols[3].metric("Avg H2H", f"{pred_df['h2h_matches'].mean():.1f}")
+
+    display_cols = [
+        "time_lagos",
+        "location",
+        "match",
+        "winner_pick",
+        "winner_probability",
+        "total_pick",
+        "total_probability",
+        "expected_total_points",
+        "first_set_pick",
+        "first_set_probability",
+        "expected_first_set_points",
+        "confidence",
+        "h2h_matches",
+        "match_id",
+    ]
+    st.dataframe(format_prediction_table(filtered[display_cols]), use_container_width=True, height=560)
+    st.download_button(
+        "Download live predictions CSV",
+        data=pred_df.to_csv(index=False).encode("utf-8"),
+        file_name="setka_live_predictions.csv",
+        mime="text/csv",
+    )
+
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        st.subheader("Strong winners")
+        st.dataframe(
+            format_prediction_table(pred_df.sort_values("winner_probability", ascending=False).head(7)[["time_lagos", "match", "winner_pick", "winner_probability", "confidence"]]),
+            use_container_width=True,
+        )
+    with s2:
+        st.subheader("Strong totals")
+        st.dataframe(
+            format_prediction_table(pred_df.sort_values("total_probability", ascending=False).head(7)[["time_lagos", "match", "total_pick", "total_probability", "expected_total_points"]]),
+            use_container_width=True,
+        )
+    with s3:
+        st.subheader("Strong 1st set")
+        st.dataframe(
+            format_prediction_table(pred_df.sort_values("first_set_probability", ascending=False).head(7)[["time_lagos", "match", "first_set_pick", "first_set_probability", "expected_first_set_points"]]),
+            use_container_width=True,
+        )
+
+    st.caption("Analytical estimates only — not guaranteed results or betting advice.")
+
+
+elif page == "Results Checker":
+    st.title("✅ Results Checker")
+    st.markdown("Check official Setka results, live scores, set totals, and grade stored prediction snapshots.")
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    today_lagos = pd.Timestamp.now(tz="Africa/Lagos").date()
+    c1, c2, c3 = st.columns([1, 1, 1.4])
+    with c1:
+        result_date = st.date_input("Setka date", value=today_lagos)
+    with c2:
+        period_label = st.selectbox("Day period", ["All", "Morning", "Evening", "Night"], index=0)
+        period_map = {"All": None, "Morning": 1, "Evening": 2, "Night": 3}
+    with c3:
+        if st.button("Refresh results", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+
+    try:
+        result_df = load_official_results(str(result_date), period_map[period_label])
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    if result_df.empty:
+        st.warning("No official result rows returned for that date/period.")
+        st.stop()
+
+    rcols = st.columns(4)
+    rcols[0].metric("Matches", f"{len(result_df):,}")
+    rcols[1].metric("Finished", f"{(result_df['status'] == 'Finished').sum():,}")
+    rcols[2].metric("Live", f"{(result_df['status'] == 'Live').sum():,}")
+    rcols[3].metric("Scheduled", f"{(result_df['status'] == 'Scheduled').sum():,}")
+
+    st.subheader("Official result feed")
+    filter_text = st.text_input("Search player/location/match id", value="")
+    view = result_df.copy()
+    view["match"] = view["player1"] + " vs " + view["player2"]
+    if filter_text:
+        needle = filter_text.lower().strip()
+        view = view.loc[
+            view.apply(lambda r: needle in " ".join(str(v).lower() for v in r.values), axis=1)
+        ]
+    cols = ["start_time_lagos", "location", "status", "match", "player1_score", "player2_score", "winner", "set_scores", "total_points", "first_set_total", "match_id"]
+    st.dataframe(view[[c for c in cols if c in view.columns]], use_container_width=True, height=430)
+
+    with st.expander("Grade former prediction snapshot", expanded=True):
+        st.caption("This grades the earlier predictions we generated in this chat for the first Setka night matches.")
+        graded_rows = []
+        for match_id, pred in FORMER_PREDICTIONS.items():
+            row_match = result_df.loc[result_df["match_id"] == match_id]
+            if row_match.empty:
+                graded_rows.append({"match_id": match_id, **pred, "status": "Not found today"})
+                continue
+            row = row_match.iloc[0]
+            actual_total = None
+            if pd.notna(row.get("total_points")):
+                actual_total = "Over" if row["total_points"] > 75.5 else "Under"
+            actual_first = None
+            if pd.notna(row.get("first_set_total")):
+                actual_first = "Over" if row["first_set_total"] > 18.5 else "Under"
+            graded_rows.append(
+                {
+                    "match_id": match_id,
+                    "time_lagos": row.get("start_time_lagos"),
+                    "match": f"{row.get('player1')} vs {row.get('player2')}",
+                    "status": row.get("status"),
+                    "score": f"{row.get('player1_score')} - {row.get('player2_score')}",
+                    "sets": row.get("set_scores"),
+                    "winner_pick": pred["winner_pick"],
+                    "actual_winner": row.get("winner") or None,
+                    "winner_grade": grade_pick(pred["winner_pick"], row.get("winner") or None),
+                    "total_pick": pred["total_pick"],
+                    "actual_total_pick": actual_total,
+                    "total_points": row.get("total_points"),
+                    "total_grade": grade_pick(pred["total_pick"], actual_total),
+                    "first_set_pick": pred["first_set_pick"],
+                    "actual_first_set_pick": actual_first,
+                    "first_set_total": row.get("first_set_total"),
+                    "first_set_grade": grade_pick(pred["first_set_pick"], actual_first),
+                }
+            )
+        graded = pd.DataFrame(graded_rows)
+        st.dataframe(graded, use_container_width=True)
+        finished = graded.loc[graded["actual_winner"].notna()] if "actual_winner" in graded else pd.DataFrame()
+        if not finished.empty:
+            win_acc = (finished["winner_grade"] == "✅").mean()
+            total_acc = (finished["total_grade"] == "✅").mean()
+            first_acc = (finished["first_set_grade"] == "✅").mean()
+            a1, a2, a3 = st.columns(3)
+            a1.metric("Winner accuracy", format_percent(win_acc))
+            a2.metric("Total accuracy", format_percent(total_acc))
+            a3.metric("1st-set accuracy", format_percent(first_acc))
+
+
+elif page == "Match Predictor":
     st.title("🏓 Match Predictor")
     st.markdown(
         "Estimate match winner, expected total points, and **first set Over/Under 18.5** from the Setka history."

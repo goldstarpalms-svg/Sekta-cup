@@ -4,12 +4,31 @@ Interactive Streamlit app for Setka Cup/table-tennis analysis, built from the up
 
 It includes:
 
+- official Setka upcoming-match feed integration
+- live prediction board with confidence filters
+- official Setka results/live-score checker
+- automatic grading for saved prediction snapshots
 - transparent rule-blend prediction
 - optional scikit-learn/XGBoost ML training
 - live odds/API integration scaffolds
 - a data-source/research registry for the resources collected during planning
 
 ## Main features
+
+### Live Predictions
+
+- Fetches upcoming matches from the official Setka API
+- Converts match times to Lagos time
+- Produces winner, total-points, and first-set Over/Under predictions
+- Adds confidence, H2H count, expected total points, and expected first-set points
+- Includes filters to hide weak picks and CSV export
+
+### Results Checker
+
+- Fetches official Setka tournament results and live widget scores
+- Shows scheduled, live, and finished matches
+- Calculates set-score text, first-set total, and match total points
+- Grades stored prediction snapshots against actual results
 
 ### Match Predictor
 
@@ -118,6 +137,8 @@ setka-prediction-app/
 ├── notebooks/
 │   └── Setka_ML_Training_Colab.ipynb
 ├── scripts/
+│   ├── live_predictions.py
+│   ├── check_results.py
 │   ├── train_models.py
 │   └── tune_winner_model.py
 └── src/
@@ -148,6 +169,16 @@ python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
 pip install -r requirements.txt
 streamlit run app.py
+```
+
+## CLI helpers
+
+```bash
+# Upcoming official Setka predictions
+python scripts/live_predictions.py --limit 20
+
+# Official result/live-score check
+python scripts/check_results.py --date 2026-07-25 --period all
 ```
 
 ## Add API keys
