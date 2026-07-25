@@ -20,13 +20,17 @@ from src.model_intelligence import (
     winner_component_agreement,
 )
 from src.persistence import (
+    BANKROLL_JOURNAL_FILE,
     DAILY_RESULTS_FILE,
     STRONG_PICKS_FILE,
+    load_bankroll_journal,
     load_daily_results,
     load_strong_picks,
     official_results_to_match_history,
+    reset_bankroll_journal,
     reset_daily_results,
     reset_strong_picks,
+    save_bankroll_journal,
     save_daily_results,
     save_strong_picks,
 )
@@ -227,6 +231,7 @@ with st.sidebar:
             "Live Match Center",
             "Owner Edge Engine",
             "Strong Pick Tracker",
+            "Bankroll Journal",
             "Results Checker",
             "Match Predictor",
             "Model Intelligence",
@@ -682,6 +687,40 @@ def grade_pick(prediction: str | None, actual: str | None) -> str:
     if not prediction or not actual:
         return "Pending"
     return "✅" if str(prediction).strip() == str(actual).strip() else "❌"
+
+
+def bet_profit_loss(stake: float, decimal_odds: float, result: str) -> float | None:
+    result = str(result).lower()
+    stake = float(stake or 0)
+    decimal_odds = float(decimal_odds or 0)
+    if result == "won":
+        return stake * max(decimal_odds - 1, 0)
+    if result == "lost":
+        return -stake
+    if result == "void":
+        return 0.0
+    return None
+
+
+def journal_summary(frame: pd.DataFrame) -> dict[str, float | int | None]:
+    if frame is None or frame.empty:
+        return {"bets": 0, "settled": 0, "staked": 0.0, "profit": 0.0, "roi": None, "win_rate": None}
+    df = frame.copy()
+    df["stake"] = pd.to_numeric(df.get("stake", 0), errors="coerce").fillna(0)
+    df["profit_loss"] = pd.to_numeric(df.get("profit_loss"), errors="coerce")
+    settled = df.loc[df["profit_loss"].notna()]
+    staked = float(settled["stake"].sum()) if not settled.empty else 0.0
+    profit = float(settled["profit_loss"].sum()) if not settled.empty else 0.0
+    wins = int((settled.get("result", "").astype(str).str.lower() == "won").sum()) if not settled.empty else 0
+    losses = int((settled.get("result", "").astype(str).str.lower() == "lost").sum()) if not settled.empty else 0
+    return {
+        "bets": int(len(df)),
+        "settled": int(len(settled)),
+        "staked": staked,
+        "profit": profit,
+        "roi": profit / staked if staked else None,
+        "win_rate": wins / (wins + losses) if (wins + losses) else None,
+    }
 
 
 def save_strong_picks_to_tracker(frame: pd.DataFrame, source: str) -> int:
@@ -1491,6 +1530,134 @@ elif page == "Strong Pick Tracker":
             reset_daily_results()
             st.success("Saved daily results reset.")
             st.rerun()
+
+
+elif page == "Bankroll Journal":
+    st.title("💰 Bankroll Journal")
+    st.markdown("Track actual money performance from strong picks: stake, odds taken, result, profit/loss, ROI, and daily discipline.")
+
+    journal = load_bankroll_journal()
+    strong_picks = load_strong_picks()
+
+    if github_storage_enabled():
+        st.success(f"Permanent storage active. Journal file: `{BANKROLL_JOURNAL_FILE.name}`")
+    else:
+        st.warning("Permanent GitHub storage is not configured. Journal may reset on Streamlit redeploy. Add GitHub storage secrets for permanence.")
+
+    st.subheader("Add bet record")
+    source_options = ["Manual entry"]
+    pick_lookup = {}
+    if not strong_picks.empty:
+        strong_picks = strong_picks.copy()
+        strong_picks["pick_label"] = strong_picks.apply(
+            lambda r: f"{r.get('time_lagos', '')} | {r.get('match', '')} | {r.get('best_market', '')}: {r.get('best_pick', '')} | ID {r.get('match_id', '')}",
+            axis=1,
+        )
+        source_options.extend(strong_picks["pick_label"].tail(100).tolist())
+        pick_lookup = {r["pick_label"]: r for _, r in strong_picks.iterrows()}
+
+    j1, j2 = st.columns([2, 1])
+    with j1:
+        selected_pick = st.selectbox("Select saved strong pick or manual", source_options)
+    with j2:
+        bet_date = st.date_input("Bet date", value=pd.Timestamp.now(tz="Africa/Lagos").date(), key="journal_date")
+
+    selected_row = pick_lookup.get(selected_pick)
+    default_match = selected_row.get("match", "") if selected_row is not None else ""
+    default_market = selected_row.get("best_market", "") if selected_row is not None else ""
+    default_pick = selected_row.get("best_pick", "") if selected_row is not None else ""
+    default_match_id = selected_row.get("match_id", "") if selected_row is not None else ""
+
+    f1, f2, f3, f4 = st.columns(4)
+    with f1:
+        journal_match = st.text_input("Match", value=str(default_match))
+    with f2:
+        journal_market = st.text_input("Market", value=str(default_market))
+    with f3:
+        journal_pick = st.text_input("Pick", value=str(default_pick))
+    with f4:
+        journal_match_id = st.text_input("Match ID", value=str(default_match_id))
+
+    b1, b2, b3, b4 = st.columns(4)
+    with b1:
+        stake = st.number_input("Stake", min_value=0.0, value=0.0, step=100.0)
+    with b2:
+        odds_taken = st.number_input("Odds taken", min_value=1.01, value=1.80, step=0.01)
+    with b3:
+        result = st.selectbox("Result", ["Pending", "Won", "Lost", "Void"], index=0)
+    with b4:
+        bookmaker = st.text_input("Bookmaker", value="")
+
+    profit_loss = bet_profit_loss(stake, odds_taken, result)
+    edge_note = ""
+    if selected_row is not None and pd.notna(selected_row.get("minimum_value_odds")):
+        try:
+            min_odds = float(selected_row.get("minimum_value_odds"))
+            edge_note = "Value odds met" if odds_taken >= min_odds else f"Below min value odds ({min_odds:.2f})"
+        except Exception:
+            edge_note = ""
+
+    preview_cols = st.columns(3)
+    preview_cols[0].metric("Profit/Loss", "Pending" if profit_loss is None else f"{profit_loss:,.2f}")
+    preview_cols[1].metric("Value check", edge_note or "-")
+    preview_cols[2].metric("Potential payout", f"{stake * odds_taken:,.2f}" if stake else "-")
+
+    if st.button("Save bet to journal", type="primary"):
+        journal_id = f"{pd.Timestamp.now(tz='Africa/Lagos').strftime('%Y%m%d%H%M%S')}-{journal_match_id}-{journal_market}-{journal_pick}"
+        new_record = pd.DataFrame([
+            {
+                "journal_id": journal_id,
+                "date": str(bet_date),
+                "saved_at_lagos": pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S"),
+                "match_id": journal_match_id,
+                "match": journal_match,
+                "market": journal_market,
+                "pick": journal_pick,
+                "stake": stake,
+                "odds_taken": odds_taken,
+                "result": result,
+                "profit_loss": profit_loss,
+                "bookmaker": bookmaker,
+                "value_note": edge_note,
+                "source": "strong_pick" if selected_row is not None else "manual",
+            }
+        ])
+        journal = save_bankroll_journal(new_record)
+        st.success("Saved bet to bankroll journal.")
+
+    st.divider()
+    journal = load_bankroll_journal()
+    summary = journal_summary(journal)
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Bets", f"{summary['bets']:,}")
+    m2.metric("Settled", f"{summary['settled']:,}")
+    m3.metric("Total staked", f"{summary['staked']:,.2f}")
+    m4.metric("P/L", f"{summary['profit']:,.2f}")
+    m5.metric("ROI", format_percent(summary["roi"]) if summary["roi"] is not None else "-")
+
+    if not journal.empty:
+        view = journal.copy()
+        view["stake"] = pd.to_numeric(view.get("stake"), errors="coerce")
+        view["profit_loss"] = pd.to_numeric(view.get("profit_loss"), errors="coerce")
+        st.subheader("Journal records")
+        st.dataframe(view.sort_values("saved_at_lagos", ascending=False), use_container_width=True, height=460)
+
+        if "date" in view.columns and view["profit_loss"].notna().any():
+            daily = view.dropna(subset=["profit_loss"]).groupby("date", as_index=False).agg(
+                stake=("stake", "sum"), profit_loss=("profit_loss", "sum"), bets=("journal_id", "count")
+            )
+            st.plotly_chart(px.bar(daily, x="date", y="profit_loss", title="Daily P/L"), use_container_width=True)
+
+        cdl, crs = st.columns(2)
+        with cdl:
+            st.download_button("Download bankroll journal CSV", journal.to_csv(index=False).encode("utf-8"), "bankroll_journal.csv", "text/csv")
+        with crs:
+            if st.button("Reset bankroll journal permanently"):
+                reset_bankroll_journal()
+                st.success("Bankroll journal reset.")
+                st.rerun()
+    else:
+        st.info("No bankroll journal records yet.")
 
 
 elif page == "Results Checker":

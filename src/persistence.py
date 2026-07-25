@@ -11,6 +11,7 @@ from src.github_storage import github_storage_enabled, load_csv as github_load_c
 APP_STATE_DIR = Path(__file__).resolve().parents[1] / "data" / "app_state"
 STRONG_PICKS_FILE = APP_STATE_DIR / "strong_picks.csv"
 DAILY_RESULTS_FILE = APP_STATE_DIR / "daily_results.csv"
+BANKROLL_JOURNAL_FILE = APP_STATE_DIR / "bankroll_journal.csv"
 
 
 def ensure_state_dir() -> Path:
@@ -99,6 +100,18 @@ def save_daily_results(frame: pd.DataFrame) -> pd.DataFrame:
 
 def reset_daily_results() -> None:
     reset_table(DAILY_RESULTS_FILE)
+
+
+def load_bankroll_journal() -> pd.DataFrame:
+    return load_table(BANKROLL_JOURNAL_FILE)
+
+
+def save_bankroll_journal(frame: pd.DataFrame) -> pd.DataFrame:
+    return append_unique(frame, BANKROLL_JOURNAL_FILE, subset=["journal_id"])
+
+
+def reset_bankroll_journal() -> None:
+    reset_table(BANKROLL_JOURNAL_FILE)
 
 
 def official_results_to_match_history(results: pd.DataFrame) -> pd.DataFrame:

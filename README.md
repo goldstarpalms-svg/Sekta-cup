@@ -7,6 +7,7 @@ It includes:
 - official Setka upcoming-match feed integration
 - Setka Trading Desk with live ticker, protection mode, stop-loss, bankroll caps, and GREEN/WATCH/NO BET decisions
 - Persistent Strong Pick Tracker that saves GREEN/strong picks until reset and auto-grades only those picks against official Setka results
+- Bankroll Journal with odds taken, stake, result, profit/loss, ROI, and daily P/L tracking
 - Daily official results storage that feeds newly saved finished matches back into the model context on reload
 - live Setka prediction board with confidence filters, pick-strength labels, mobile cards, and set-count Over/Under
 - Live Match Center with in-play Setka scores, set scores, active player, auto-refresh, and official viewing links
@@ -70,6 +71,13 @@ It includes:
 - Grades only the saved strong picks against official Setka results
 - Tracks won/lost/pending and strong-pick accuracy
 - Supports CSV download/upload so the owner can keep records
+
+### Bankroll Journal
+
+- Save actual bets from strong picks or manual entries
+- Track odds taken, stake, bookmaker, result, profit/loss, ROI, and daily P/L
+- Checks whether odds taken met the model's minimum value odds
+- Supports CSV export and permanent storage when GitHub storage is configured
 
 ### Daily Results Store
 
