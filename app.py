@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -53,6 +54,7 @@ try:
     )
     from src.source_registry import categories as source_categories
     from src.source_registry import registry_dataframe, summary_by_category
+    from src.sports_config import sports_dataframe, supported_sport_names
 
     ODDS_IMPORT_ERROR = None
 except Exception as exc:  # pragma: no cover - shown inside the UI
@@ -90,6 +92,23 @@ CUSTOM_CSS = """
 }
 .pick-title { font-size: 1rem; font-weight: 800; margin-bottom: 0.25rem; }
 .pick-meta { color: #94A3B8; font-size: 0.85rem; margin-bottom: 0.55rem; }
+.hero {
+    border-radius: 26px;
+    padding: 2.0rem 1.4rem;
+    margin-bottom: 1rem;
+    border: 1px solid rgba(248, 250, 252, 0.10);
+    background: radial-gradient(circle at top left, rgba(249, 115, 22, 0.35), transparent 30%), linear-gradient(135deg, #07111f, #111827 48%, #1e293b);
+}
+.hero h1 { font-size: clamp(2rem, 6vw, 4.2rem); line-height: 1.0; margin-bottom: 0.45rem; }
+.hero p { color: #CBD5E1; font-size: 1.05rem; max-width: 760px; }
+.feature-card {
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 18px;
+    padding: 1rem;
+    min-height: 145px;
+    background: rgba(15, 23, 42, 0.55);
+}
+.feature-card h3 { margin-top: 0; margin-bottom: 0.35rem; }
 .badge-strong { color: #22C55E; font-weight: 900; }
 .badge-medium { color: #F59E0B; font-weight: 900; }
 .badge-watch { color: #38BDF8; font-weight: 900; }
@@ -135,9 +154,13 @@ with st.sidebar:
     page = st.radio(
         "Go to",
         [
+            "Home",
+            "Sports Hub",
             "Live Predictions",
             "Results Checker",
             "Match Predictor",
+            "Smart Stake Calc",
+            "Bet Slip Tools",
             "ML Lab",
             "Live Odds",
             "Data Sources",
@@ -412,6 +435,37 @@ def enable_browser_auto_refresh(seconds: int) -> None:
     )
 
 
+def decimal_from_text(value: str) -> float | None:
+    try:
+        number = float(str(value).strip())
+        return number if number > 1 else None
+    except Exception:
+        return None
+
+
+def parse_decimal_odds(text: str) -> list[float]:
+    return [x for x in (decimal_from_text(v) for v in re.split(r"[\s,;|/]+", text or "")) if x]
+
+
+def combined_decimal_odds(odds: list[float]) -> float:
+    value = 1.0
+    for odd in odds:
+        value *= float(odd)
+    return value
+
+
+def kelly_fraction(probability: float, decimal_odds: float) -> float:
+    b = decimal_odds - 1
+    if b <= 0:
+        return 0.0
+    q = 1 - probability
+    return max(0.0, ((b * probability) - q) / b)
+
+
+def implied_probability(decimal_odds: float) -> float:
+    return 1 / decimal_odds if decimal_odds and decimal_odds > 1 else 0.0
+
+
 FORMER_PREDICTIONS = {
     804491: {"winner_pick": "Dmitri Gribcov", "total_pick": "Over", "first_set_pick": "Over"},
     804612: {"winner_pick": "Orest Hura", "total_pick": "Over", "first_set_pick": "Over"},
@@ -432,7 +486,81 @@ def grade_pick(prediction: str | None, actual: str | None) -> str:
     return "✅" if str(prediction).strip() == str(actual).strip() else "❌"
 
 
-if page == "Live Predictions":
+if page == "Home":
+    st.markdown(
+        """
+<div class="hero">
+  <div class="small-muted">🚀 MULTI-SPORT PREDICTION & SAFER STAKING DASHBOARD</div>
+  <h1>Bet smarter with data, not emotions.</h1>
+  <p>Setka Cup predictions are live now. Multi-sport odds, stake calculator, bet slip tools, result checking, and AI-style risk labels are being added step by step.</p>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Historical Setka matches", f"{global_stats['match_count']:,}")
+    m2.metric("Players tracked", f"{global_stats['player_count']:,}")
+    m3.metric("Sports hub", f"{len(supported_sport_names())} sports")
+    m4.metric("Main timezone", "Lagos")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown('<div class="feature-card"><h3>🔴 Live Predictions</h3><p>Upcoming official Setka matches with winner, total, first-set O/U, confidence, H2H, and pick-strength labels.</p></div>', unsafe_allow_html=True)
+    with c2:
+        st.markdown('<div class="feature-card"><h3>✅ Result Checker</h3><p>Official scores, set totals, live status, and grading for prediction CSV snapshots.</p></div>', unsafe_allow_html=True)
+    with c3:
+        st.markdown('<div class="feature-card"><h3>🧮 Smart Stake Calc</h3><p>Calculate payout, implied probability, model edge, expected value, and Kelly stake sizing.</p></div>', unsafe_allow_html=True)
+
+    c4, c5, c6 = st.columns(3)
+    with c4:
+        st.markdown('<div class="feature-card"><h3>🎟️ Bet Slip Tools</h3><p>Paste decimal odds, estimate combined odds, potential payout, and risk level.</p></div>', unsafe_allow_html=True)
+    with c5:
+        st.markdown('<div class="feature-card"><h3>🌍 Other Sports</h3><p>Football, basketball, tennis, baseball, hockey, and American football are scaffolded for odds/API integration.</p></div>', unsafe_allow_html=True)
+    with c6:
+        st.markdown('<div class="feature-card"><h3>🤖 ML Lab</h3><p>Train scikit-learn/XGBoost models and compare them with transparent rule-blend predictions.</p></div>', unsafe_allow_html=True)
+
+    st.info("This app is for analytical decision support. It does not guarantee results and is not financial advice.")
+
+
+elif page == "Sports Hub":
+    st.title("🌍 Multi-Sport Hub")
+    st.markdown("Setka Cup is active now. Other sports are prepared for odds/API feeds and future model training.")
+    if ODDS_IMPORT_ERROR is not None:
+        st.warning(f"Some odds/source modules could not load: {ODDS_IMPORT_ERROR}")
+    sports_df = sports_dataframe()
+    st.dataframe(sports_df, use_container_width=True, height=330)
+
+    st.subheader("Add a sport workflow")
+    sport = st.selectbox("Sport", sports_df["sport"].tolist())
+    market = st.text_input("Market to model", value="Winner / Moneyline")
+    data_plan = st.text_area(
+        "Data/API plan",
+        value="Use official API, licensed odds feed, CSV upload, or permitted export. Avoid unauthorized scraping.",
+    )
+    if st.button("Create sport roadmap"):
+        st.success(f"Roadmap created for {sport}")
+        st.markdown(
+            f"""
+**{sport} roadmap**
+
+1. Collect permitted fixture/result history.  
+2. Normalize teams/players and leagues.  
+3. Add odds feed mapping for `{market}`.  
+4. Build baseline model from Elo/form/H2H.  
+5. Add ML features and backtesting.  
+6. Connect Results Checker grading.
+
+**Data plan:** {data_plan}
+"""
+        )
+
+    st.subheader("Odds API quick setup")
+    st.write("For other sports, add `THE_ODDS_API_KEY` in Streamlit secrets, then use the Live Odds page to discover exact sport keys.")
+    st.code('THE_ODDS_API_KEY = "your_key_here"', language="toml")
+
+
+elif page == "Live Predictions":
     st.title("🔴 Live Setka Predictions")
     st.markdown("Fetch upcoming matches from the official Setka API and generate winner, total-points, and first-set picks in Lagos time.")
 
@@ -861,6 +989,97 @@ elif page == "Match Predictor":
         st.info("No direct head-to-head matches found in the uploaded history.")
     else:
         st.dataframe(h2h_display_table(pred["h2h_table"]), use_container_width=True)
+
+
+elif page == "Smart Stake Calc":
+    st.title("🧮 Smart Stake Calculator")
+    st.markdown("Calculate payout, implied probability, model edge, expected value, and safer fractional-Kelly stake sizing.")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        bankroll = st.number_input("Bankroll", min_value=0.0, value=10000.0, step=500.0)
+    with c2:
+        stake = st.number_input("Planned stake", min_value=0.0, value=500.0, step=50.0)
+    with c3:
+        odds = st.number_input("Decimal odds", min_value=1.01, value=1.80, step=0.01)
+    with c4:
+        model_prob = st.slider("Your/model probability", 1, 99, 55) / 100
+
+    implied = implied_probability(odds)
+    payout = stake * odds
+    profit = payout - stake
+    edge = model_prob - implied
+    ev = (model_prob * profit) - ((1 - model_prob) * stake)
+    ev_pct = ev / stake if stake else 0
+    kelly = kelly_fraction(model_prob, odds)
+    safer_kelly = kelly * 0.25
+    suggested = min(bankroll * safer_kelly, bankroll * 0.05) if bankroll else 0
+
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Potential payout", f"{payout:,.2f}")
+    s2.metric("Potential profit", f"{profit:,.2f}")
+    s3.metric("Implied probability", format_percent(implied))
+    s4.metric("Model edge", format_percent(edge))
+
+    e1, e2, e3 = st.columns(3)
+    e1.metric("Expected value", f"{ev:,.2f}", delta=format_percent(ev_pct))
+    e2.metric("Full Kelly", format_percent(kelly))
+    e3.metric("Safer 1/4 Kelly stake", f"{suggested:,.2f}")
+
+    if edge <= 0:
+        st.warning("No value detected: model probability is not higher than implied probability.")
+    elif suggested < stake:
+        st.info("Value detected, but your planned stake is above the safer 1/4 Kelly suggestion.")
+    else:
+        st.success("Value detected and planned stake is within safer sizing range.")
+
+    st.caption("Kelly sizing is only a mathematical tool. Use small stakes, avoid chasing losses, and manage risk.")
+
+
+elif page == "Bet Slip Tools":
+    st.title("🎟️ Bet Slip Tools")
+    st.markdown("Paste decimal odds to calculate combined odds, payout, and slip risk. This is the first version of merge/split-style bet tools.")
+
+    b1, b2 = st.columns([1.4, 1])
+    with b1:
+        odds_text = st.text_area("Paste decimal odds", value="1.45\n1.80\n2.10", height=180, help="Separate odds with spaces, commas, lines, /, |, or ;")
+    with b2:
+        slip_stake = st.number_input("Slip stake", min_value=0.0, value=1000.0, step=100.0)
+        target_parts = st.slider("Split into slips", 1, 10, 2)
+
+    odds_list = parse_decimal_odds(odds_text)
+    if not odds_list:
+        st.warning("Enter decimal odds above 1.00.")
+        st.stop()
+
+    combined = combined_decimal_odds(odds_list)
+    implied_combo = implied_probability(combined)
+    payout = slip_stake * combined
+    profit = payout - slip_stake
+    risk_label = "Low" if len(odds_list) <= 2 and combined < 4 else "Medium" if len(odds_list) <= 4 and combined < 12 else "High"
+
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("Selections", f"{len(odds_list)}")
+    q2.metric("Combined odds", f"{combined:.2f}")
+    q3.metric("Potential payout", f"{payout:,.2f}")
+    q4.metric("Risk level", risk_label)
+
+    st.subheader("Slip breakdown")
+    slip_df = pd.DataFrame({"selection": range(1, len(odds_list) + 1), "decimal_odds": odds_list})
+    slip_df["implied_probability"] = slip_df["decimal_odds"].map(implied_probability)
+    st.dataframe(slip_df, use_container_width=True)
+
+    split_stake = slip_stake / target_parts if target_parts else slip_stake
+    st.subheader("Simple split staking")
+    st.write(f"If you split **{slip_stake:,.2f}** into **{target_parts}** slips, each slip stake is about **{split_stake:,.2f}**.")
+    st.info("Next upgrade can split selections into multiple lower-risk combinations automatically.")
+
+    st.download_button(
+        "Download slip CSV",
+        data=slip_df.to_csv(index=False).encode("utf-8"),
+        file_name="bet_slip_odds.csv",
+        mime="text/csv",
+    )
 
 
 elif page == "ML Lab":

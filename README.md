@@ -4,16 +4,45 @@ Interactive Streamlit app for Setka Cup/table-tennis analysis, built from the up
 
 It includes:
 
+- SaferStake-inspired multi-sport dashboard structure
 - official Setka upcoming-match feed integration
 - live prediction board with confidence filters, pick-strength labels, and mobile cards
 - official Setka results/live-score checker with auto-refresh option
 - automatic grading for saved/uploaded prediction snapshots
+- multi-sport hub for football, basketball, tennis, baseball, hockey, and American football scaffolds
+- smart stake calculator with edge, EV, and safer fractional-Kelly sizing
+- bet slip tools for combined odds, payout, risk level, and CSV export
 - transparent rule-blend prediction
 - optional scikit-learn/XGBoost ML training
 - live odds/API integration scaffolds
 - a data-source/research registry for the resources collected during planning
 
 ## Main features
+
+### Home / Multi-sport dashboard
+
+- Landing dashboard inspired by safer staking tools
+- Quick access to live predictions, results, stake calculator, bet slip tools, ML Lab, and sports hub
+- Multi-sport structure without copying any third-party brand or proprietary design
+
+### Sports Hub
+
+- Setka Cup active now
+- Football, basketball, tennis, baseball, ice hockey, and American football scaffolds
+- Roadmap generator for adding each new sport with permitted data/API feeds
+
+### Smart Stake Calc
+
+- Decimal odds payout calculator
+- Implied probability and model edge
+- Expected value estimate
+- Full Kelly and safer 1/4 Kelly stake suggestion
+
+### Bet Slip Tools
+
+- Paste multiple decimal odds
+- Calculate combined odds, implied probability, payout, and risk level
+- Simple split-stake planning and CSV export
 
 ### Live Predictions
 
@@ -150,6 +179,7 @@ setka-prediction-app/
     ├── odds_api.py
     ├── setka_core.py
     ├── setka_live.py
+    ├── sports_config.py
     └── source_registry.py
 ```
 
