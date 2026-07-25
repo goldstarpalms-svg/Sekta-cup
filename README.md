@@ -5,10 +5,11 @@ Interactive Streamlit app for Setka Cup/table-tennis analysis, built from the up
 It includes:
 
 - official Setka upcoming-match feed integration
-- live Setka prediction board with confidence filters, pick-strength labels, and mobile cards
+- live Setka prediction board with confidence filters, pick-strength labels, mobile cards, and set-count Over/Under
 - official Setka results/live-score checker with auto-refresh option
 - automatic grading for saved/uploaded Setka prediction snapshots
 - enhanced winner model with recent H2H, point-difference, set-difference, calibration, and upset-risk flags
+- set-count markets: Over/Under 3.5 sets and Over/Under 4.5 sets
 - time-split Accuracy Lab backtesting with recommended probability filters
 - smart stake calculator for table-tennis selections with edge, EV, and safer fractional-Kelly sizing
 - bet slip tools for table-tennis odds, combined payout, risk level, and CSV export
@@ -28,7 +29,7 @@ It includes:
 ### Accuracy Lab
 
 - Time-split holdout testing of recent Setka matches
-- Winner, total-points, and first-set accuracy
+- Winner, total-points, first-set, and sets Over/Under accuracy
 - Accuracy by probability threshold
 - Recommended live filters to avoid weak picks
 

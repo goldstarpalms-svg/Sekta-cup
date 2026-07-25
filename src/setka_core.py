@@ -124,6 +124,8 @@ def enrich_matches(matches: pd.DataFrame) -> pd.DataFrame:
     df["p1_won"] = df["winner"].eq(df["player1"])
     df["first_set_p1_won"] = df["first_set_p1_points"] > df["first_set_p2_points"]
     df["first_set_p2_won"] = df["first_set_p2_points"] > df["first_set_p1_points"]
+    df["sets_over_3_5"] = df["sets_played"] > 3.5
+    df["sets_over_4_5"] = df["sets_played"] > 4.5
     return df
 
 
@@ -143,6 +145,8 @@ def make_player_match_log(matches: pd.DataFrame) -> pd.DataFrame:
         "first_set_total": m["first_set_total"],
         "first_set_over_18_5": m["first_set_over_18_5"],
         "sets_played": m["sets_played"],
+        "sets_over_3_5": m["sets_over_3_5"],
+        "sets_over_4_5": m["sets_over_4_5"],
     }
 
     p1 = pd.DataFrame(
@@ -192,6 +196,8 @@ def build_player_stats(
     log = player_log.copy()
     log["won"] = log["won"].astype(bool)
     log["first_set_over_18_5"] = log["first_set_over_18_5"].astype(bool)
+    log["sets_over_3_5"] = log["sets_over_3_5"].astype(bool)
+    log["sets_over_4_5"] = log["sets_over_4_5"].astype(bool)
     log["first_set_won"] = log["first_set_won"].astype(bool)
 
     grouped = log.groupby("player", dropna=False)
@@ -202,6 +208,8 @@ def build_player_stats(
         avg_points_against=("points_against", "mean"),
         avg_point_diff=("point_diff", "mean"),
         avg_sets_played=("sets_played", "mean"),
+        sets_over_3_5_rate=("sets_over_3_5", "mean"),
+        sets_over_4_5_rate=("sets_over_4_5", "mean"),
         avg_set_diff=("set_diff", "mean"),
         avg_total_points=("total_points", "mean"),
         std_total_points=("total_points", "std"),
@@ -223,6 +231,9 @@ def build_player_stats(
         recent_avg_total_points=("total_points", "mean"),
         recent_avg_first_set_total=("first_set_total", "mean"),
         recent_first_set_over_18_5_rate=("first_set_over_18_5", "mean"),
+        recent_sets_over_3_5_rate=("sets_over_3_5", "mean"),
+        recent_sets_over_4_5_rate=("sets_over_4_5", "mean"),
+        recent_avg_sets_played=("sets_played", "mean"),
         recent_avg_point_diff=("point_diff", "mean"),
     ).reset_index()
 
@@ -250,8 +261,16 @@ def build_player_stats(
         "recent_win_rate": stats.get("win_rate", pd.Series(0.5, index=stats.index)),
         "first_set_win_rate": 0.5,
         "first_set_over_18_5_rate": 0.5,
+        "sets_over_3_5_rate": 0.5,
+        "sets_over_4_5_rate": 0.35,
         "recent_first_set_over_18_5_rate": stats.get(
             "first_set_over_18_5_rate", pd.Series(0.5, index=stats.index)
+        ),
+        "recent_sets_over_3_5_rate": stats.get(
+            "sets_over_3_5_rate", pd.Series(0.5, index=stats.index)
+        ),
+        "recent_sets_over_4_5_rate": stats.get(
+            "sets_over_4_5_rate", pd.Series(0.35, index=stats.index)
         ),
     }
     for col, default in rate_defaults.items():
@@ -270,6 +289,7 @@ def build_player_stats(
         "std_first_set_total",
         "recent_avg_total_points",
         "recent_avg_first_set_total",
+        "recent_avg_sets_played",
         "recent_avg_point_diff",
     ]
     for col in numeric_mean_cols:
@@ -297,6 +317,9 @@ def build_global_stats(matches: pd.DataFrame, player_stats: pd.DataFrame) -> dic
         "first_set_mean": float(matches["first_set_total"].mean()),
         "first_set_std": float(matches["first_set_total"].std()),
         "first_set_over_18_5_rate": float(matches["first_set_over_18_5"].mean()),
+        "sets_over_3_5_rate": float(matches["sets_over_3_5"].mean()),
+        "sets_over_4_5_rate": float(matches["sets_over_4_5"].mean()),
+        "sets_played_std": float(matches["sets_played"].std()),
         "avg_sets_played": float(matches["sets_played"].mean()),
     }
 
@@ -340,6 +363,9 @@ def get_head_to_head(
             "std_total_points": np.nan,
             "avg_first_set_total": np.nan,
             "std_first_set_total": np.nan,
+            "avg_sets_played": np.nan,
+            "sets_over_3_5_rate": np.nan,
+            "sets_over_4_5_rate": np.nan,
             "first_set_over_18_5_rate": np.nan,
             "last_played": pd.NaT,
         }
@@ -362,6 +388,9 @@ def get_head_to_head(
         "std_total_points": float(h2h["total_points"].std()) if total > 1 else np.nan,
         "avg_first_set_total": float(h2h["first_set_total"].mean()),
         "std_first_set_total": float(h2h["first_set_total"].std()) if total > 1 else np.nan,
+        "avg_sets_played": float(h2h["sets_played"].mean()),
+        "sets_over_3_5_rate": float(h2h["sets_over_3_5"].mean()),
+        "sets_over_4_5_rate": float(h2h["sets_over_4_5"].mean()),
         "first_set_over_18_5_rate": float(h2h["first_set_over_18_5"].mean()),
         "last_played": h2h["date_time"].max(),
     }
@@ -443,6 +472,7 @@ def predict_match(
     global_stats: dict[str, Any],
     first_set_line: float = 18.5,
     total_points_line: float = 75.5,
+    sets_line: float = 3.5,
 ) -> dict[str, Any]:
     """Blend Elo, form, career numbers, H2H, and point totals into one prediction.
 
@@ -512,6 +542,10 @@ def predict_match(
     global_first_over = float(global_stats.get("first_set_over_18_5_rate", 0.5))
     global_total_mean = float(global_stats.get("total_points_mean", 75.3))
     global_total_std = float(global_stats.get("total_points_std", 16.6))
+    global_sets_mean = float(global_stats.get("avg_sets_played", 4.02))
+    global_sets_std = float(global_stats.get("sets_played_std", 0.82))
+    global_sets_over_3_5 = float(global_stats.get("sets_over_3_5_rate", 0.70))
+    global_sets_over_4_5 = float(global_stats.get("sets_over_4_5_rate", 0.32))
 
     # Expected first-set points.
     expected_first = _weighted_mean(
@@ -580,14 +614,17 @@ def predict_match(
     # sets also nudges totals up/down because Setka totals are highly set-count driven.
     expected_sets = _weighted_mean(
         [
-            (global_stats.get("avg_sets_played", 4.02), 1.0),
-            (_value(a, "avg_sets_played", global_stats.get("avg_sets_played", 4.02)), 0.8 * a_rel),
-            (_value(b, "avg_sets_played", global_stats.get("avg_sets_played", 4.02)), 0.8 * b_rel),
+            (global_sets_mean, 1.0),
+            (_value(a, "avg_sets_played", global_sets_mean), 0.8 * a_rel),
+            (_value(b, "avg_sets_played", global_sets_mean), 0.8 * b_rel),
+            (_value(a, "recent_avg_sets_played", global_sets_mean), 0.7 * a_rel),
+            (_value(b, "recent_avg_sets_played", global_sets_mean), 0.7 * b_rel),
+            (h2h["avg_sets_played"], 1.25 * h2h_rel),
         ],
-        default=global_stats.get("avg_sets_played", 4.02),
+        default=global_sets_mean,
     )
     expected_total += ((0.5 - abs(player_a_win_probability - 0.5)) * 5.4) - 1.1
-    expected_total += (expected_sets - float(global_stats.get("avg_sets_played", 4.02))) * 7.0
+    expected_total += (expected_sets - global_sets_mean) * 7.0
     expected_total = _clamp(expected_total, 33.0, 135.0)
 
     total_std = _weighted_mean(
@@ -600,6 +637,26 @@ def predict_match(
         default=global_total_std,
     )
     total_over_probability = _normal_over_probability(expected_total, total_points_line, total_std)
+
+    # Best-of-5 set-count market: Over/Under 3.5 means 4+ sets; Over/Under 4.5 means 5 sets.
+    set_empirical_key = "sets_over_3_5_rate" if sets_line <= 3.5 else "sets_over_4_5_rate"
+    recent_set_key = "recent_sets_over_3_5_rate" if sets_line <= 3.5 else "recent_sets_over_4_5_rate"
+    global_set_over = global_sets_over_3_5 if sets_line <= 3.5 else global_sets_over_4_5
+    set_line_probability = _normal_over_probability(expected_sets, sets_line, max(global_sets_std, 0.55))
+    empirical_set_over = _weighted_mean(
+        [
+            (global_set_over, 1.0),
+            (_value(a, set_empirical_key, global_set_over), 1.1 * a_rel),
+            (_value(b, set_empirical_key, global_set_over), 1.1 * b_rel),
+            (_value(a, recent_set_key, global_set_over), 0.8 * a_rel),
+            (_value(b, recent_set_key, global_set_over), 0.8 * b_rel),
+            (h2h[set_empirical_key], 1.5 * h2h_rel),
+        ],
+        default=global_set_over,
+    )
+    # Close winner probability strongly increases the chance of 4/5 sets.
+    closeness_boost = (0.5 - abs(player_a_win_probability - 0.5)) * (0.24 if sets_line <= 3.5 else 0.18)
+    sets_over_probability = _clamp(0.58 * empirical_set_over + 0.42 * set_line_probability + closeness_boost - 0.06, 0.03, 0.97)
 
     confidence_score = 0.0
     confidence_score += 30 * min(a_rel, b_rel)
@@ -655,6 +712,10 @@ def predict_match(
         "total_points_line": float(total_points_line),
         "total_points_over_probability": total_over_probability,
         "total_points_under_probability": 1 - total_over_probability,
+        "expected_sets_played": expected_sets,
+        "sets_line": float(sets_line),
+        "sets_over_probability": sets_over_probability,
+        "sets_under_probability": 1 - sets_over_probability,
         "confidence": confidence,
         "confidence_score": confidence_score,
         "h2h_table": h2h_rows,
@@ -671,6 +732,8 @@ def comparison_table(player_stats: pd.DataFrame, player_a: str, player_b: str) -
         "avg_total_points",
         "avg_first_set_total",
         "first_set_over_18_5_rate",
+        "sets_over_3_5_rate",
+        "sets_over_4_5_rate",
         "avg_point_diff",
         "last_played",
     ]
@@ -680,6 +743,9 @@ def comparison_table(player_stats: pd.DataFrame, player_a: str, player_b: str) -
     table["first_set_over_18_5_rate"] = table["first_set_over_18_5_rate"].map(
         lambda x: f"{x:.1%}"
     )
+    for rate_col in ["sets_over_3_5_rate", "sets_over_4_5_rate"]:
+        if rate_col in table:
+            table[rate_col] = table[rate_col].map(lambda x: f"{x:.1%}")
     for c in ["avg_total_points", "avg_first_set_total", "avg_point_diff"]:
         table[c] = table[c].map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
     table = table.rename(
@@ -691,6 +757,8 @@ def comparison_table(player_stats: pd.DataFrame, player_a: str, player_b: str) -
             "avg_total_points": "Avg match points",
             "avg_first_set_total": "Avg 1st-set points",
             "first_set_over_18_5_rate": "1st set O18.5 rate",
+            "sets_over_3_5_rate": "Sets O3.5 rate",
+            "sets_over_4_5_rate": "Sets O4.5 rate",
             "avg_point_diff": "Avg point diff",
             "last_played": "Last played",
         }

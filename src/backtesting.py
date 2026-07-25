@@ -13,6 +13,7 @@ def run_holdout_backtest(
     test_rows: int = 750,
     first_set_line: float = 18.5,
     total_points_line: float = 75.5,
+    sets_line: float = 3.5,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Time-split rule-model backtest.
 
@@ -37,6 +38,7 @@ def run_holdout_backtest(
                 ctx["global_stats"],
                 first_set_line=first_set_line,
                 total_points_line=total_points_line,
+                sets_line=sets_line,
             )
         except Exception:
             continue
@@ -45,8 +47,11 @@ def run_holdout_backtest(
         total_prob = max(pred["total_points_over_probability"], pred["total_points_under_probability"])
         first_pick = "Over" if pred["first_set_over_probability"] >= pred["first_set_under_probability"] else "Under"
         first_prob = max(pred["first_set_over_probability"], pred["first_set_under_probability"])
+        sets_pick = "Over" if pred["sets_over_probability"] >= pred["sets_under_probability"] else "Under"
+        sets_prob = max(pred["sets_over_probability"], pred["sets_under_probability"])
         actual_total_pick = "Over" if float(match["total_points"]) > total_points_line else "Under"
         actual_first_pick = "Over" if float(match["first_set_total"]) > first_set_line else "Under"
+        actual_sets_pick = "Over" if float(match["sets_played"]) > sets_line else "Under"
         rows.append(
             {
                 "date_time": match["date_time"],
@@ -64,6 +69,11 @@ def run_holdout_backtest(
                 "actual_first_set_pick": actual_first_pick,
                 "first_set_correct": first_pick == actual_first_pick,
                 "first_set_probability": first_prob,
+                "sets_pick": sets_pick,
+                "actual_sets_pick": actual_sets_pick,
+                "sets_correct": sets_pick == actual_sets_pick,
+                "sets_probability": sets_prob,
+                "sets_played": match.get("sets_played"),
                 "confidence": pred.get("confidence"),
                 "confidence_score": pred.get("confidence_score"),
                 "upset_risk": pred.get("upset_risk"),
@@ -83,6 +93,7 @@ def summarize_backtest(df: pd.DataFrame) -> dict[str, Any]:
         "winner_accuracy": float(df["winner_correct"].mean()),
         "total_accuracy": float(df["total_correct"].mean()),
         "first_set_accuracy": float(df["first_set_correct"].mean()),
+        "sets_accuracy": float(df["sets_correct"].mean()),
     }
     for threshold in [0.55, 0.58, 0.60, 0.65, 0.70]:
         subset = df.loc[df["winner_probability"] >= threshold]
@@ -94,6 +105,9 @@ def summarize_backtest(df: pd.DataFrame) -> dict[str, Any]:
         subset = df.loc[df["first_set_probability"] >= threshold]
         metrics[f"first_acc_{threshold:.2f}"] = float(subset["first_set_correct"].mean()) if not subset.empty else None
         metrics[f"first_count_{threshold:.2f}"] = int(len(subset))
+        subset = df.loc[df["sets_probability"] >= threshold]
+        metrics[f"sets_acc_{threshold:.2f}"] = float(subset["sets_correct"].mean()) if not subset.empty else None
+        metrics[f"sets_count_{threshold:.2f}"] = int(len(subset))
     return metrics
 
 
@@ -103,6 +117,7 @@ def threshold_table(df: pd.DataFrame) -> pd.DataFrame:
         ("Winner", "winner_probability", "winner_correct"),
         ("Total", "total_probability", "total_correct"),
         ("1st Set", "first_set_probability", "first_set_correct"),
+        ("Sets", "sets_probability", "sets_correct"),
     ]:
         for threshold in [0.50, 0.55, 0.58, 0.60, 0.65, 0.70]:
             subset = df.loc[df[prob_col] >= threshold]

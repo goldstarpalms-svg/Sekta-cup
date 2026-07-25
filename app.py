@@ -147,7 +147,7 @@ def train_ml_cached(algorithm: str, max_training_rows: int | None):
 
 
 @st.cache_data(show_spinner="Running time-split backtest...")
-def run_backtest_cached(test_rows: int, first_set_line: float, total_points_line: float):
+def run_backtest_cached(test_rows: int, first_set_line: float, total_points_line: float, sets_line: float):
     raw_matches, raw_leaderboard = load_raw_data()
     return run_holdout_backtest(
         raw_matches,
@@ -155,6 +155,7 @@ def run_backtest_cached(test_rows: int, first_set_line: float, total_points_line
         test_rows=test_rows,
         first_set_line=first_set_line,
         total_points_line=total_points_line,
+        sets_line=sets_line,
     )
 
 
@@ -309,7 +310,7 @@ def load_official_results(match_date: str, day_period: int | None) -> pd.DataFra
     return frame
 
 
-def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line: float) -> dict:
+def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line: float, sets_line: float) -> dict:
     pred = predict_match(
         row["player1"],
         row["player2"],
@@ -318,12 +319,15 @@ def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line
         global_stats,
         first_set_line=first_set_line,
         total_points_line=total_points_line,
+        sets_line=sets_line,
     )
     winner_prob = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
     total_pick = "Over" if pred["total_points_over_probability"] >= pred["total_points_under_probability"] else "Under"
     total_prob = max(pred["total_points_over_probability"], pred["total_points_under_probability"])
     first_pick = "Over" if pred["first_set_over_probability"] >= pred["first_set_under_probability"] else "Under"
     first_prob = max(pred["first_set_over_probability"], pred["first_set_under_probability"])
+    sets_pick = "Over" if pred["sets_over_probability"] >= pred["sets_under_probability"] else "Under"
+    sets_prob = max(pred["sets_over_probability"], pred["sets_under_probability"])
     return {
         "match_id": row.get("match_id"),
         "time_lagos": row.get("start_time_lagos"),
@@ -340,6 +344,10 @@ def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line
         "first_set_pick": first_pick,
         "first_set_probability": first_prob,
         "expected_first_set_points": pred["expected_first_set_points"],
+        "sets_pick": sets_pick,
+        "sets_probability": sets_prob,
+        "expected_sets_played": pred["expected_sets_played"],
+        "sets_line": pred["sets_line"],
         "confidence": pred["confidence"],
         "confidence_score": pred["confidence_score"],
         "upset_risk": pred.get("upset_risk", ""),
@@ -389,21 +397,27 @@ def apply_pick_strengths(df: pd.DataFrame) -> pd.DataFrame:
     out["first_set_strength"] = out.apply(
         lambda r: pick_strength(r.get("first_set_probability"), r.get("confidence"), r.get("upset_risk")), axis=1
     )
-    out["best_market"] = out[["winner_probability", "total_probability", "first_set_probability"]].idxmax(axis=1)
+    out["sets_strength"] = out.apply(
+        lambda r: pick_strength(r.get("sets_probability"), r.get("confidence"), r.get("upset_risk")), axis=1
+    )
+    out["best_market"] = out[["winner_probability", "total_probability", "first_set_probability", "sets_probability"]].idxmax(axis=1)
     out["best_market"] = out["best_market"].map(
         {
             "winner_probability": "Winner",
             "total_probability": "Total",
             "first_set_probability": "1st Set",
+            "sets_probability": "Sets",
         }
     )
-    out["best_probability"] = out[["winner_probability", "total_probability", "first_set_probability"]].max(axis=1)
+    out["best_probability"] = out[["winner_probability", "total_probability", "first_set_probability", "sets_probability"]].max(axis=1)
     out["best_pick"] = out.apply(
         lambda r: r["winner_pick"]
         if r["best_market"] == "Winner"
         else f"{r['total_pick']} total"
         if r["best_market"] == "Total"
-        else f"{r['first_set_pick']} 1st set",
+        else f"{r['first_set_pick']} 1st set"
+        if r["best_market"] == "1st Set"
+        else f"{r['sets_pick']} sets",
         axis=1,
     )
     out["best_strength"] = out.apply(
@@ -415,10 +429,10 @@ def apply_pick_strengths(df: pd.DataFrame) -> pd.DataFrame:
 
 def format_prediction_table(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    for col in ["winner_probability", "total_probability", "first_set_probability", "best_probability"]:
+    for col in ["winner_probability", "total_probability", "first_set_probability", "sets_probability", "best_probability"]:
         if col in out:
             out[col] = out[col].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
-    for col in ["expected_total_points", "expected_first_set_points", "confidence_score"]:
+    for col in ["expected_total_points", "expected_first_set_points", "expected_sets_played", "confidence_score"]:
         if col in out:
             out[col] = out[col].map(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
     return out
@@ -434,7 +448,7 @@ def render_mobile_pick_cards(df: pd.DataFrame, limit: int = 8) -> None:
   <div class="pick-title">{r.get('time_lagos', '')} • {r.get('match', '')}</div>
   <div class="pick-meta">{r.get('location', '')} • H2H {r.get('h2h_matches', 0)} • Confidence {r.get('confidence', '')} • Upset risk {r.get('upset_risk', '')}</div>
   <div>Best: <b>{r.get('best_market', '')}</b> — <b>{r.get('best_pick', '')}</b> ({r.get('best_probability', 0):.1%}) <span class="{css_class}">{strength}</span></div>
-  <div class="pick-meta">Winner: {r.get('winner_pick', '')} {r.get('winner_probability', 0):.1%} • Total: {r.get('total_pick', '')} {r.get('total_probability', 0):.1%} • 1st set: {r.get('first_set_pick', '')} {r.get('first_set_probability', 0):.1%}</div>
+  <div class="pick-meta">Winner: {r.get('winner_pick', '')} {r.get('winner_probability', 0):.1%} • Total: {r.get('total_pick', '')} {r.get('total_probability', 0):.1%} • 1st set: {r.get('first_set_pick', '')} {r.get('first_set_probability', 0):.1%} • Sets: {r.get('sets_pick', '')} {r.get('sets_probability', 0):.1%}</div>
 </div>
 """,
             unsafe_allow_html=True,
@@ -554,9 +568,11 @@ elif page == "Live Predictions":
         st.divider()
         st.caption("Live prediction filters")
         live_limit = st.slider("Upcoming matches to read", 5, 50, 20, 5)
-        min_winner = st.slider("Min winner probability", 50, 90, 55, 1) / 100
-        min_total = st.slider("Min total-points probability", 50, 80, 56, 1) / 100
-        min_first = st.slider("Min first-set probability", 50, 80, 55, 1) / 100
+        min_winner = st.slider("Min winner probability", 50, 90, 60, 1) / 100
+        min_total = st.slider("Min total-points probability", 50, 80, 57, 1) / 100
+        min_first = st.slider("Min first-set probability", 50, 80, 56, 1) / 100
+        min_sets = st.slider("Min sets O/U probability", 50, 85, 58, 1) / 100
+        hide_high_upset = st.checkbox("Hide high upset-risk winner picks", value=True)
         show_only_strong = st.checkbox("Show only picks passing filters", value=False)
         auto_refresh = st.checkbox("Auto-refresh page", value=False)
         refresh_seconds = st.selectbox("Refresh every", [15, 30, 60, 120], index=1)
@@ -564,16 +580,18 @@ elif page == "Live Predictions":
     if auto_refresh:
         enable_browser_auto_refresh(refresh_seconds)
 
-    c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
+    c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1])
     with c1:
         first_set_line = st.number_input("1st set line", 10.5, 35.5, 18.5, 0.5, key="live_first")
     with c2:
         total_points_line = st.number_input("Total points line", 30.5, 140.5, 75.5, 0.5, key="live_total")
     with c3:
+        sets_line = st.selectbox("Sets line", [3.5, 4.5], index=0, key="live_sets")
+    with c4:
         if st.button("Refresh official feed", type="primary"):
             st.cache_data.clear()
             st.rerun()
-    with c4:
+    with c5:
         st.caption("Cache refreshes automatically every 30 seconds.")
 
     try:
@@ -585,7 +603,7 @@ elif page == "Live Predictions":
     rows = []
     for _, match_row in upcoming.iterrows():
         if match_row.get("player1") and match_row.get("player2"):
-            rows.append(prediction_pick_row(match_row, first_set_line, total_points_line))
+            rows.append(prediction_pick_row(match_row, first_set_line, total_points_line, sets_line))
     pred_df = apply_pick_strengths(pd.DataFrame(rows))
 
     if pred_df.empty:
@@ -598,7 +616,10 @@ elif page == "Live Predictions":
             (filtered["winner_probability"] >= min_winner)
             | (filtered["total_probability"] >= min_total)
             | (filtered["first_set_probability"] >= min_first)
+            | (filtered["sets_probability"] >= min_sets)
         ]
+    if hide_high_upset:
+        filtered = filtered.loc[~((filtered["best_market"] == "Winner") & (filtered["upset_risk"] == "High"))]
 
     top_cols = st.columns(5)
     top_cols[0].metric("Official matches", f"{len(upcoming):,}")
@@ -630,6 +651,10 @@ elif page == "Live Predictions":
         "first_set_probability",
         "first_set_strength",
         "expected_first_set_points",
+        "sets_pick",
+        "sets_probability",
+        "sets_strength",
+        "expected_sets_played",
         "confidence",
         "upset_risk",
         "upset_risk_flags",
@@ -662,11 +687,11 @@ elif page == "Live Predictions":
                 mime="text/csv",
             )
 
-    s1, s2, s3 = st.columns(3)
+    s1, s2, s3, s4 = st.columns(4)
     with s1:
         st.subheader("Strong winners")
         st.dataframe(
-            format_prediction_table(pred_df.sort_values("winner_probability", ascending=False).head(7)[["time_lagos", "match", "winner_pick", "winner_probability", "confidence"]]),
+            format_prediction_table(pred_df.sort_values("winner_probability", ascending=False).head(7)[["time_lagos", "match", "winner_pick", "winner_probability", "upset_risk"]]),
             use_container_width=True,
         )
     with s2:
@@ -679,6 +704,12 @@ elif page == "Live Predictions":
         st.subheader("Strong 1st set")
         st.dataframe(
             format_prediction_table(pred_df.sort_values("first_set_probability", ascending=False).head(7)[["time_lagos", "match", "first_set_pick", "first_set_probability", "expected_first_set_points"]]),
+            use_container_width=True,
+        )
+    with s4:
+        st.subheader("Strong sets")
+        st.dataframe(
+            format_prediction_table(pred_df.sort_values("sets_probability", ascending=False).head(7)[["time_lagos", "match", "sets_pick", "sets_probability", "expected_sets_played"]]),
             use_container_width=True,
         )
 
@@ -857,7 +888,7 @@ elif page == "Match Predictor":
         "Estimate match winner, expected total points, and **first set Over/Under 18.5** from the Setka history."
     )
 
-    c1, c2, c3, c4 = st.columns([2.2, 2.2, 1.25, 1.25])
+    c1, c2, c3, c4, c5 = st.columns([2.2, 2.2, 1.1, 1.1, 1.0])
     with c1:
         player_a = st.selectbox("Player A", players_by_elo, index=0)
     with c2:
@@ -871,6 +902,8 @@ elif page == "Match Predictor":
         total_points_line = st.number_input(
             "Total points line", min_value=30.5, max_value=140.5, value=75.5, step=0.5
         )
+    with c5:
+        sets_line = st.selectbox("Sets line", [3.5, 4.5], index=0)
 
     if player_a == player_b:
         st.error("Choose two different players.")
@@ -884,19 +917,24 @@ elif page == "Match Predictor":
         global_stats,
         first_set_line=first_set_line,
         total_points_line=total_points_line,
+        sets_line=sets_line,
     )
 
     st.divider()
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Predicted winner", pred["predicted_winner"])
     m2.metric(f"{player_a} win chance", format_percent(pred["player_a_win_probability"]))
     m3.metric(
         f"1st set Over {first_set_line}",
         format_percent(pred["first_set_over_probability"]),
     )
-    m4.metric("Confidence", pred["confidence"], help="Based on player sample size, Elo availability, recent data, and H2H sample.")
+    m4.metric(
+        f"Sets Over {sets_line}",
+        format_percent(pred["sets_over_probability"]),
+    )
+    m5.metric("Upset risk", pred.get("upset_risk", "-"), help="Flags weak/conflicting winner picks.")
 
-    r1, r2 = st.columns([1.05, 1])
+    r1, r2, r3 = st.columns(3)
     with r1:
         st.plotly_chart(probability_bar(pred), use_container_width=True)
     with r2:
@@ -908,15 +946,25 @@ elif page == "Match Predictor":
             ),
             use_container_width=True,
         )
+    with r3:
+        st.plotly_chart(
+            over_under_bar(
+                f"Sets O/U {sets_line}",
+                pred["sets_over_probability"],
+                pred["sets_under_probability"],
+            ),
+            use_container_width=True,
+        )
 
-    line_cols = st.columns(4)
+    line_cols = st.columns(5)
     line_cols[0].metric("Expected 1st-set points", format_number(pred["expected_first_set_points"], 2))
     line_cols[1].metric("Expected total points", format_number(pred["expected_total_points"], 2))
-    line_cols[2].metric(
+    line_cols[2].metric("Expected sets", format_number(pred["expected_sets_played"], 2))
+    line_cols[3].metric(
         f"Total Over {total_points_line}",
         format_percent(pred["total_points_over_probability"]),
     )
-    line_cols[3].metric(
+    line_cols[4].metric(
         f"Total Under {total_points_line}",
         format_percent(pred["total_points_under_probability"]),
     )
@@ -925,25 +973,31 @@ elif page == "Match Predictor":
     total_prob = max(pred["total_points_over_probability"], pred["total_points_under_probability"])
     first_pick = "Over" if pred["first_set_over_probability"] >= pred["first_set_under_probability"] else "Under"
     first_prob = max(pred["first_set_over_probability"], pred["first_set_under_probability"])
+    sets_pick = "Over" if pred["sets_over_probability"] >= pred["sets_under_probability"] else "Under"
+    sets_prob = max(pred["sets_over_probability"], pred["sets_under_probability"])
     winner_prob = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
     st.info(
-        f"Pick strength → Winner: {pick_strength(winner_prob, pred['confidence'])} | "
-        f"Total: {total_pick} {pick_strength(total_prob, pred['confidence'])} | "
-        f"1st set: {first_pick} {pick_strength(first_prob, pred['confidence'])}"
+        f"Pick strength → Winner: {pick_strength(winner_prob, pred['confidence'], pred.get('upset_risk'))} | "
+        f"Total: {total_pick} {pick_strength(total_prob, pred['confidence'], pred.get('upset_risk'))} | "
+        f"1st set: {first_pick} {pick_strength(first_prob, pred['confidence'], pred.get('upset_risk'))} | "
+        f"Sets: {sets_pick} {pick_strength(sets_prob, pred['confidence'], pred.get('upset_risk'))}"
     )
 
     with st.expander("Manual odds value check", expanded=False):
         st.caption("Optional: compare your model probability with bookmaker decimal odds. Positive edge means model probability is higher than implied probability.")
-        odds_market = st.selectbox("Market", ["Winner", "Total", "1st Set"], key="manual_odds_market")
+        odds_market = st.selectbox("Market", ["Winner", "Total", "1st Set", "Sets"], key="manual_odds_market")
         if odds_market == "Winner":
             model_probability = winner_prob
             model_pick = pred["predicted_winner"]
         elif odds_market == "Total":
             model_probability = total_prob
             model_pick = total_pick
-        else:
+        elif odds_market == "1st Set":
             model_probability = first_prob
             model_pick = first_pick
+        else:
+            model_probability = sets_prob
+            model_pick = f"{sets_pick} {sets_line} sets"
         decimal_odds = st.number_input("Decimal odds", min_value=1.01, max_value=50.0, value=1.80, step=0.01)
         implied_probability = 1 / decimal_odds
         edge = model_probability - implied_probability
@@ -979,7 +1033,7 @@ elif page == "Accuracy Lab":
     st.title("🎯 Accuracy Lab")
     st.markdown("Time-split backtesting for the Setka rule model. This helps us trust only the best filters instead of every pick.")
 
-    b1, b2, b3, b4 = st.columns(4)
+    b1, b2, b3, b4, b5 = st.columns(5)
     with b1:
         test_rows = st.selectbox("Holdout matches", [250, 500, 750, 1000, 1500], index=2)
     with b2:
@@ -987,6 +1041,8 @@ elif page == "Accuracy Lab":
     with b3:
         bt_total_line = st.number_input("Total line", 30.5, 140.5, 75.5, 0.5, key="bt_total")
     with b4:
+        bt_sets_line = st.selectbox("Sets line", [3.5, 4.5], index=0, key="bt_sets")
+    with b5:
         run_bt = st.button("Run backtest", type="primary")
 
     if not run_bt and "backtest_df" not in st.session_state:
@@ -994,7 +1050,7 @@ elif page == "Accuracy Lab":
         st.stop()
 
     if run_bt:
-        bt_df, bt_metrics = run_backtest_cached(test_rows, bt_first_line, bt_total_line)
+        bt_df, bt_metrics = run_backtest_cached(test_rows, bt_first_line, bt_total_line, bt_sets_line)
         st.session_state["backtest_df"] = bt_df
         st.session_state["backtest_metrics"] = bt_metrics
     else:
@@ -1005,11 +1061,12 @@ elif page == "Accuracy Lab":
         st.warning("No backtest rows generated.")
         st.stop()
 
-    a1, a2, a3, a4 = st.columns(4)
+    a1, a2, a3, a4, a5 = st.columns(5)
     a1.metric("Backtest rows", f"{bt_metrics.get('rows', 0):,}")
     a2.metric("Winner accuracy", format_percent(bt_metrics.get("winner_accuracy")))
     a3.metric("Total accuracy", format_percent(bt_metrics.get("total_accuracy")))
     a4.metric("1st-set accuracy", format_percent(bt_metrics.get("first_set_accuracy")))
+    a5.metric("Sets O/U accuracy", format_percent(bt_metrics.get("sets_accuracy")))
 
     st.subheader("Accuracy by probability threshold")
     th = threshold_table(bt_df)
@@ -1027,6 +1084,7 @@ elif page == "Accuracy Lab":
         ("Winner", "winner_probability", "winner_correct"),
         ("Total", "total_probability", "total_correct"),
         ("1st Set", "first_set_probability", "first_set_correct"),
+        ("Sets", "sets_probability", "sets_correct"),
     ]:
         best = None
         for threshold in [0.55, 0.58, 0.60, 0.65, 0.70]:
