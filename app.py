@@ -12,6 +12,13 @@ import streamlit.components.v1 as components
 
 from src.backtesting import run_holdout_backtest, threshold_table
 from src.github_storage import github_storage_enabled
+from src.model_intelligence import (
+    calibrated_probability,
+    market_confidence_label,
+    match_fatigue_summary,
+    player_reliability_tags,
+    winner_component_agreement,
+)
 from src.persistence import (
     DAILY_RESULTS_FILE,
     STRONG_PICKS_FILE,
@@ -222,6 +229,7 @@ with st.sidebar:
             "Strong Pick Tracker",
             "Results Checker",
             "Match Predictor",
+            "Model Intelligence",
             "Accuracy Lab",
             "Smart Stake Calc",
             "Bet Slip Tools",
@@ -374,13 +382,29 @@ def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line
         total_points_line=total_points_line,
         sets_line=sets_line,
     )
-    winner_prob = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
+    raw_winner_prob = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
+    winner_prob = calibrated_probability(raw_winner_prob, "winner")
     total_pick = "Over" if pred["total_points_over_probability"] >= pred["total_points_under_probability"] else "Under"
-    total_prob = max(pred["total_points_over_probability"], pred["total_points_under_probability"])
+    raw_total_prob = max(pred["total_points_over_probability"], pred["total_points_under_probability"])
+    total_prob = calibrated_probability(raw_total_prob, "total")
     first_pick = "Over" if pred["first_set_over_probability"] >= pred["first_set_under_probability"] else "Under"
-    first_prob = max(pred["first_set_over_probability"], pred["first_set_under_probability"])
+    raw_first_prob = max(pred["first_set_over_probability"], pred["first_set_under_probability"])
+    first_prob = calibrated_probability(raw_first_prob, "first_set")
     sets_pick = "Over" if pred["sets_over_probability"] >= pred["sets_under_probability"] else "Under"
-    sets_prob = max(pred["sets_over_probability"], pred["sets_under_probability"])
+    raw_sets_prob = max(pred["sets_over_probability"], pred["sets_under_probability"])
+    sets_prob = calibrated_probability(raw_sets_prob, "sets")
+    agreement = winner_component_agreement(pred, player_stats)
+    fatigue = match_fatigue_summary(
+        player_log,
+        row["player1"],
+        row["player2"],
+        row.get("start_date_lagos"),
+        row.get("start_time_lagos"),
+    )
+    winner_market_conf = market_confidence_label(winner_prob, pred["confidence"], pred.get("upset_risk", ""), agreement["winner_agreement_score"], fatigue["match_fatigue_risk"])
+    total_market_conf = market_confidence_label(total_prob, pred["confidence"], "Low", agreement["winner_agreement_score"], fatigue["match_fatigue_risk"])
+    first_market_conf = market_confidence_label(first_prob, pred["confidence"], "Low", agreement["winner_agreement_score"], fatigue["match_fatigue_risk"])
+    sets_market_conf = market_confidence_label(sets_prob, pred["confidence"], "Low", agreement["winner_agreement_score"], fatigue["match_fatigue_risk"])
     return {
         "match_id": row.get("match_id"),
         "time_lagos": row.get("start_time_lagos"),
@@ -391,16 +415,24 @@ def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line
         "player2": row["player2"],
         "winner_pick": pred["predicted_winner"],
         "winner_probability": winner_prob,
+        "winner_raw_probability": raw_winner_prob,
+        "winner_market_confidence": winner_market_conf,
         "total_pick": total_pick,
         "total_probability": total_prob,
+        "total_raw_probability": raw_total_prob,
+        "total_market_confidence": total_market_conf,
         "expected_total_points": pred["expected_total_points"],
         "total_points_line": float(total_points_line),
         "first_set_pick": first_pick,
         "first_set_probability": first_prob,
+        "first_set_raw_probability": raw_first_prob,
+        "first_set_market_confidence": first_market_conf,
         "expected_first_set_points": pred["expected_first_set_points"],
         "first_set_line": float(first_set_line),
         "sets_pick": sets_pick,
         "sets_probability": sets_prob,
+        "sets_raw_probability": raw_sets_prob,
+        "sets_market_confidence": sets_market_conf,
         "expected_sets_played": pred["expected_sets_played"],
         "sets_line": pred["sets_line"],
         "confidence": pred["confidence"],
@@ -408,6 +440,10 @@ def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line
         "upset_risk": pred.get("upset_risk", ""),
         "upset_risk_flags": ", ".join(pred.get("upset_risk_flags", [])),
         "h2h_matches": pred["h2h_matches"],
+        **agreement,
+        **fatigue,
+        "player1_reliability": player_reliability_tags(player_stats, row["player1"]),
+        "player2_reliability": player_reliability_tags(player_stats, row["player2"]),
     }
 
 
@@ -478,6 +514,16 @@ def apply_pick_strengths(df: pd.DataFrame) -> pd.DataFrame:
     out["best_strength"] = out.apply(
         lambda r: pick_strength(r.get("best_probability"), r.get("confidence"), r.get("upset_risk")), axis=1
     )
+    out["best_market_confidence"] = out.apply(
+        lambda r: r.get("winner_market_confidence")
+        if r.get("best_market") == "Winner"
+        else r.get("total_market_confidence")
+        if r.get("best_market") == "Total"
+        else r.get("first_set_market_confidence")
+        if r.get("best_market") == "1st Set"
+        else r.get("sets_market_confidence"),
+        axis=1,
+    )
     out["snapshot_time_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
     return out
 
@@ -501,8 +547,8 @@ def render_mobile_pick_cards(df: pd.DataFrame, limit: int = 8) -> None:
             f"""
 <div class="pick-card">
   <div class="pick-title">{r.get('time_lagos', '')} • {r.get('match', '')}</div>
-  <div class="pick-meta">{r.get('location', '')} • H2H {r.get('h2h_matches', 0)} • Confidence {r.get('confidence', '')} • Upset risk {r.get('upset_risk', '')}</div>
-  <div>Best: <b>{r.get('best_market', '')}</b> — <b>{r.get('best_pick', '')}</b> ({r.get('best_probability', 0):.1%}) <span class="{css_class}">{strength}</span></div>
+  <div class="pick-meta">{r.get('location', '')} • H2H {r.get('h2h_matches', 0)} • Agreement {r.get('winner_agreement', '-')} • Fatigue {r.get('match_fatigue_risk', '-')} • Upset {r.get('upset_risk', '')}</div>
+  <div>Best: <b>{r.get('best_market', '')}</b> — <b>{r.get('best_pick', '')}</b> ({r.get('best_probability', 0):.1%}) <span class="{css_class}">{strength}</span> • {r.get('best_market_confidence', '')}</div>
   <div class="pick-meta">Winner: {r.get('winner_pick', '')} {r.get('winner_probability', 0):.1%} • Total: {r.get('total_pick', '')} {r.get('total_probability', 0):.1%} • 1st set: {r.get('first_set_pick', '')} {r.get('first_set_probability', 0):.1%} • Sets: {r.get('sets_pick', '')} {r.get('sets_probability', 0):.1%}</div>
 </div>
 """,
@@ -571,19 +617,28 @@ def owner_edge_score(row: pd.Series) -> float:
     prob = float(row.get("best_probability", 0) or 0)
     confidence_bonus = {"High": 0.08, "Medium": 0.03, "Low": -0.05}.get(str(row.get("confidence", "")), 0)
     risk_penalty = {"Low": 0.00, "Medium": 0.06, "High": 0.18}.get(str(row.get("upset_risk", "")), 0.08)
+    fatigue_penalty = {"Low": 0.00, "Medium": 0.03, "High": 0.08, "Unknown": 0.01}.get(str(row.get("match_fatigue_risk", "")), 0.01)
     h2h_bonus = min(float(row.get("h2h_matches", 0) or 0), 60) / 1000
     strength_bonus = {"Strong": 0.04, "Medium": 0.01, "Watch": -0.02, "Avoid": -0.10}.get(str(row.get("best_strength", "")), 0)
-    return max(0.0, min(1.0, prob + confidence_bonus + h2h_bonus + strength_bonus - risk_penalty))
+    agreement_bonus = (float(row.get("winner_agreement_score", 0.5) or 0.5) - 0.5) * 0.10
+    market_bonus = {"Elite": 0.06, "Strong": 0.03, "Playable": 0.00, "Weak": -0.08}.get(str(row.get("best_market_confidence", "")), 0.0)
+    return max(0.0, min(1.0, prob + confidence_bonus + h2h_bonus + strength_bonus + agreement_bonus + market_bonus - risk_penalty - fatigue_penalty))
 
 
 def owner_decision(row: pd.Series) -> str:
     score = float(row.get("edge_score", 0) or 0)
     prob = float(row.get("best_probability", 0) or 0)
+    agreement = float(row.get("winner_agreement_score", 0.5) or 0.5)
+    market_conf = str(row.get("best_market_confidence", ""))
     if row.get("best_market") == "Winner" and row.get("upset_risk") == "High":
         return "NO BET"
-    if score >= 0.72 and prob >= 0.60:
+    if row.get("match_fatigue_risk") == "High" and row.get("best_market") == "Winner":
+        return "NO BET"
+    if market_conf == "Weak":
+        return "NO BET"
+    if score >= 0.72 and prob >= 0.60 and agreement >= 0.58 and market_conf in ["Elite", "Strong", "Playable"]:
         return "GREEN"
-    if score >= 0.64 and prob >= 0.57:
+    if score >= 0.64 and prob >= 0.56:
         return "WATCH"
     return "NO BET"
 
@@ -594,8 +649,14 @@ def owner_reason(row: pd.Series) -> str:
         reasons.append("high confidence")
     if float(row.get("h2h_matches", 0) or 0) >= 10:
         reasons.append("useful H2H sample")
+    if float(row.get("winner_agreement_score", 0) or 0) >= 0.67:
+        reasons.append(f"model agreement {row.get('winner_agreement', '-')}")
+    if row.get("best_market_confidence") in ["Elite", "Strong"]:
+        reasons.append(f"{row.get('best_market_confidence')} market confidence")
     if row.get("upset_risk") == "Low":
         reasons.append("low upset risk")
+    if row.get("match_fatigue_risk") == "Low":
+        reasons.append("low fatigue risk")
     if row.get("best_strength") in ["Strong", "Medium"]:
         reasons.append(f"{row.get('best_strength')} model strength")
     if not reasons:
@@ -866,7 +927,17 @@ elif page == "Setka Trading Desk":
             return "STOP"
         if row.get("best_market") == "Winner" and row.get("upset_risk") == "High":
             return "NO BET"
-        if row.get("edge_score", 0) >= min_green_score and row.get("best_probability", 0) >= min_green_prob and row.get("best_strength") in ["Strong", "Medium"]:
+        if row.get("best_market") == "Winner" and row.get("match_fatigue_risk") == "High":
+            return "NO BET"
+        if row.get("best_market_confidence") == "Weak":
+            return "NO BET"
+        if (
+            row.get("edge_score", 0) >= min_green_score
+            and row.get("best_probability", 0) >= min_green_prob
+            and row.get("best_strength") in ["Strong", "Medium"]
+            and row.get("best_market_confidence") in ["Elite", "Strong", "Playable"]
+            and float(row.get("winner_agreement_score", 0.5) or 0.5) >= 0.58
+        ):
             return "GREEN"
         if row.get("edge_score", 0) >= (min_green_score - 0.08) and row.get("best_probability", 0) >= 0.56:
             return "WATCH"
@@ -893,7 +964,7 @@ elif page == "Setka Trading Desk":
         st.error("STOP MODE ACTIVE: Daily loss limit reached. The desk will not recommend new stakes.")
 
     st.subheader("💚 GREEN opportunities")
-    cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "minimum_value_odds", "stake_cap", "confidence", "upset_risk", "reason"]
+    cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "minimum_value_odds", "stake_cap", "best_market_confidence", "winner_agreement", "match_fatigue_risk", "confidence", "upset_risk", "reason"]
     green_display = green[cols].copy()
     for c in ["best_probability", "edge_score"]:
         green_display[c] = green_display[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
@@ -915,7 +986,7 @@ elif page == "Setka Trading Desk":
     h4.metric("NO BET/STOP", f"{len(nobet):,}")
 
     with st.expander("WATCH and NO BET board", expanded=False):
-        full_cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "desk_decision", "minimum_value_odds", "confidence", "upset_risk", "upset_risk_flags", "reason"]
+        full_cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "desk_decision", "minimum_value_odds", "best_market_confidence", "winner_agreement", "match_fatigue_risk", "confidence", "upset_risk", "upset_risk_flags", "reason"]
         full = desk_df[full_cols].sort_values(["desk_decision", "edge_score"], ascending=[True, False]).copy()
         for c in ["best_probability", "edge_score"]:
             full[c] = full[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
@@ -1010,6 +1081,9 @@ elif page == "Live Predictions":
         "best_pick",
         "best_probability",
         "best_strength",
+        "best_market_confidence",
+        "winner_agreement",
+        "match_fatigue_risk",
         "winner_pick",
         "winner_probability",
         "winner_strength",
@@ -1026,6 +1100,9 @@ elif page == "Live Predictions":
         "sets_strength",
         "expected_sets_played",
         "confidence",
+        "best_market_confidence",
+        "winner_agreement",
+        "match_fatigue_risk",
         "upset_risk",
         "upset_risk_flags",
         "h2h_matches",
@@ -1236,7 +1313,7 @@ elif page == "Owner Edge Engine":
     k4.metric("NO BET", f"{(edge_df['owner_decision'] == 'NO BET').sum():,}")
 
     st.subheader("GREEN picks — only if real odds are equal/above minimum value odds")
-    cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "fair_odds", "minimum_value_odds", "max_suggested_stake", "confidence", "upset_risk", "h2h_matches", "reason"]
+    cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "fair_odds", "minimum_value_odds", "max_suggested_stake", "best_market_confidence", "winner_agreement", "match_fatigue_risk", "confidence", "upset_risk", "h2h_matches", "reason"]
     green_display = green[cols].copy()
     for c in ["best_probability", "edge_score"]:
         green_display[c] = green_display[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
@@ -1251,7 +1328,7 @@ elif page == "Owner Edge Engine":
             st.success(f"Saved {count} GREEN picks to Strong Pick Tracker.")
 
     with st.expander("Full decision board: WATCH and NO BET", expanded=False):
-        full_cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "owner_decision", "minimum_value_odds", "confidence", "upset_risk", "upset_risk_flags", "reason"]
+        full_cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "owner_decision", "minimum_value_odds", "best_market_confidence", "winner_agreement", "match_fatigue_risk", "confidence", "upset_risk", "upset_risk_flags", "reason"]
         full = edge_df[full_cols].sort_values(["owner_decision", "edge_score"], ascending=[True, False]).copy()
         for c in ["best_probability", "edge_score"]:
             full[c] = full[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
@@ -1731,6 +1808,61 @@ elif page == "Match Predictor":
         st.info("No direct head-to-head matches found in the uploaded history.")
     else:
         st.dataframe(h2h_display_table(pred["h2h_table"]), use_container_width=True)
+
+
+elif page == "Model Intelligence":
+    st.title("🧠 Model Intelligence")
+    st.markdown("See the hidden quality checks behind each Setka prediction: agreement, calibration, fatigue, market confidence, and reliability tags.")
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    i1, i2, i3, i4 = st.columns(4)
+    with i1:
+        intel_limit = st.slider("Upcoming matches", 5, 50, 20, 5, key="intel_limit")
+    with i2:
+        intel_first = st.number_input("1st set line", 10.5, 35.5, 18.5, 0.5, key="intel_first")
+    with i3:
+        intel_total = st.number_input("Total line", 30.5, 140.5, 75.5, 0.5, key="intel_total")
+    with i4:
+        intel_sets = st.selectbox("Sets line", [3.5, 4.5], index=0, key="intel_sets")
+
+    try:
+        upcoming = load_official_nearest().head(intel_limit)
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    rows = []
+    for _, match_row in upcoming.iterrows():
+        if match_row.get("player1") and match_row.get("player2"):
+            rows.append(prediction_pick_row(match_row, intel_first, intel_total, intel_sets))
+    intel_df = apply_pick_strengths(pd.DataFrame(rows))
+    if intel_df.empty:
+        st.warning("No matches available for intelligence scan.")
+        st.stop()
+    intel_df["edge_score"] = intel_df.apply(owner_edge_score, axis=1)
+    intel_df["decision"] = intel_df.apply(owner_decision, axis=1)
+    intel_df["reason"] = intel_df.apply(owner_reason, axis=1)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Avg agreement", format_percent(intel_df["winner_agreement_score"].mean()))
+    m2.metric("Elite/Strong markets", f"{intel_df['best_market_confidence'].isin(['Elite', 'Strong']).sum():,}")
+    m3.metric("High fatigue risk", f"{(intel_df['match_fatigue_risk'] == 'High').sum():,}")
+    m4.metric("GREEN decisions", f"{(intel_df['decision'] == 'GREEN').sum():,}")
+
+    cols = [
+        "time_lagos", "location", "match", "best_market", "best_pick", "best_probability",
+        "best_market_confidence", "winner_agreement", "winner_agreement_components",
+        "match_fatigue_risk", "player1_fatigue", "player2_fatigue",
+        "player1_reliability", "player2_reliability", "upset_risk", "decision", "reason", "match_id"
+    ]
+    view = intel_df[[c for c in cols if c in intel_df.columns]].copy()
+    if "best_probability" in view:
+        view["best_probability"] = view["best_probability"].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+    st.dataframe(view, use_container_width=True, height=620)
+    st.download_button("Download model intelligence CSV", intel_df.to_csv(index=False).encode("utf-8"), "setka_model_intelligence.csv", "text/csv")
 
 
 elif page == "Accuracy Lab":
