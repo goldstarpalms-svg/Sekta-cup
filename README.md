@@ -6,7 +6,8 @@ It includes:
 
 - official Setka upcoming-match feed integration
 - Setka Trading Desk with live ticker, protection mode, stop-loss, bankroll caps, and GREEN/WATCH/NO BET decisions
-- Strong Pick Tracker that saves GREEN/strong picks and auto-grades only those picks against official Setka results
+- Persistent Strong Pick Tracker that saves GREEN/strong picks until reset and auto-grades only those picks against official Setka results
+- Daily official results storage that feeds newly saved finished matches back into the model context on reload
 - live Setka prediction board with confidence filters, pick-strength labels, mobile cards, and set-count Over/Under
 - Live Match Center with in-play Setka scores, set scores, active player, auto-refresh, and official viewing links
 - Owner Edge Engine with GREEN/WATCH/NO BET decisions, minimum value odds, and bankroll caps
@@ -61,11 +62,18 @@ It includes:
 
 ### Strong Pick Tracker
 
-- Saves GREEN picks from Setka Trading Desk or Owner Edge Engine
+- Saves GREEN picks from Setka Trading Desk or Owner Edge Engine into app storage
+- Keeps saved strong picks until the reset button is used
 - Auto-checks saved pick dates against official Setka results
 - Grades only the saved strong picks against official Setka results
 - Tracks won/lost/pending and strong-pick accuracy
 - Supports CSV download/upload so the owner can keep records
+
+### Daily Results Store
+
+- Official Setka result rows are saved whenever Results Checker or Strong Pick Tracker checks results
+- Saved finished results are converted back into match-history format on app reload
+- This lets the local model context learn from newly saved official results over time
 
 ### Live Match Center
 

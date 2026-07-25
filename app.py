@@ -11,6 +11,17 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from src.backtesting import run_holdout_backtest, threshold_table
+from src.persistence import (
+    DAILY_RESULTS_FILE,
+    STRONG_PICKS_FILE,
+    load_daily_results,
+    load_strong_picks,
+    official_results_to_match_history,
+    reset_daily_results,
+    reset_strong_picks,
+    save_daily_results,
+    save_strong_picks,
+)
 from src.setka_core import (
     build_context,
     comparison_table,
@@ -134,7 +145,14 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 @st.cache_data(show_spinner="Loading and preparing Setka data...")
 def load_app_context() -> dict:
     matches, leaderboard = load_raw_data()
-    return build_context(matches, leaderboard)
+    saved_results = load_daily_results()
+    extra_matches = official_results_to_match_history(saved_results)
+    if not extra_matches.empty:
+        matches = pd.concat([matches, extra_matches], ignore_index=True)
+        matches = matches.drop_duplicates(subset=["source_match_id"], keep="last")
+    context = build_context(matches, leaderboard)
+    context["extra_saved_result_matches"] = len(extra_matches)
+    return context
 
 
 ctx = load_app_context()
@@ -210,6 +228,8 @@ with st.sidebar:
     st.caption(
         "Rule model: Elo + form + H2H. ML Lab: scikit-learn/XGBoost training."
     )
+    if ctx.get("extra_saved_result_matches", 0):
+        st.caption(f"Saved official results added to model context: {ctx['extra_saved_result_matches']:,}")
 
 
 def probability_bar(pred: dict) -> go.Figure:
@@ -588,17 +608,34 @@ def grade_pick(prediction: str | None, actual: str | None) -> str:
 
 
 def save_strong_picks_to_tracker(frame: pd.DataFrame, source: str) -> int:
+    """Persist GREEN/strong picks until the user resets the tracker."""
     if frame is None or frame.empty:
         return 0
     saved = frame.copy()
     saved["saved_at_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
     saved["tracker_source"] = source
-    old = st.session_state.get("strong_pick_tracker", pd.DataFrame())
-    combined = pd.concat([old, saved], ignore_index=True)
-    if "match_id" in combined.columns and "best_market" in combined.columns:
-        combined = combined.drop_duplicates(subset=["match_id", "best_market", "best_pick"], keep="last")
+    before = len(load_strong_picks())
+    combined = save_strong_picks(saved)
     st.session_state["strong_pick_tracker"] = combined
-    return len(saved)
+    return max(0, len(combined) - before)
+
+
+def sync_official_results_for_dates(date_texts: list[str]) -> pd.DataFrame:
+    """Fetch official Setka results for dates and persist them for future grading/training export."""
+    frames = []
+    for date_text in date_texts:
+        try:
+            frame = load_official_results(str(date_text), None)
+            if frame is not None and not frame.empty:
+                frame = frame.copy()
+                frame["synced_at_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
+                frames.append(frame)
+        except Exception:
+            continue
+    if not frames:
+        return load_daily_results()
+    combined_new = pd.concat(frames, ignore_index=True)
+    return save_daily_results(combined_new)
 
 
 def grade_best_pick(row: pd.Series) -> tuple[str, str | None]:
@@ -1159,14 +1196,17 @@ elif page == "Strong Pick Tracker":
     st.title("📌 Strong Pick Tracker")
     st.markdown("Automatically grades only GREEN/strong picks saved from the Trading Desk or Owner Edge Engine. It checks official Setka results for the saved pick dates — no weak picks mixed in.")
 
-    tracker = st.session_state.get("strong_pick_tracker", pd.DataFrame())
+    tracker = load_strong_picks()
+    session_tracker = st.session_state.get("strong_pick_tracker", pd.DataFrame())
+    if not session_tracker.empty:
+        tracker = save_strong_picks(session_tracker)
+
     upload = st.file_uploader("Optional: upload a previously downloaded strong-picks CSV", type=["csv"], key="strong_tracker_upload")
     if upload is not None:
         try:
             uploaded_tracker = pd.read_csv(upload)
-            tracker = pd.concat([tracker, uploaded_tracker], ignore_index=True)
-            st.session_state["strong_pick_tracker"] = tracker
-            st.success(f"Loaded {len(uploaded_tracker):,} uploaded strong picks.")
+            tracker = save_strong_picks(uploaded_tracker)
+            st.success(f"Loaded and saved {len(uploaded_tracker):,} uploaded strong picks.")
         except Exception as exc:
             st.exception(exc)
 
@@ -1196,16 +1236,12 @@ elif page == "Strong Pick Tracker":
     if not dates_to_check:
         dates_to_check = [str(track_date)]
 
-    try:
-        result_frames = [load_official_results(date_text, None) for date_text in dates_to_check]
-        result_df = pd.concat([df for df in result_frames if df is not None and not df.empty], ignore_index=True) if result_frames else pd.DataFrame()
-    except Exception as exc:
-        st.exception(exc)
-        st.stop()
-
+    result_df = sync_official_results_for_dates(dates_to_check)
     if result_df.empty:
         st.warning("No official results returned yet for the saved pick dates.")
         st.stop()
+    if "start_date_lagos" in result_df.columns:
+        result_df = result_df.loc[result_df["start_date_lagos"].astype(str).isin([str(d) for d in dates_to_check]) | result_df["match_id"].isin(track.get("match_id", pd.Series(dtype=float)))]
 
     result_for_merge = result_df.copy()
     result_for_merge["actual_match"] = result_for_merge["player1"] + " vs " + result_for_merge["player2"]
@@ -1248,10 +1284,19 @@ elif page == "Strong Pick Tracker":
     with dl2:
         st.download_button("Download graded results CSV", merged.to_csv(index=False).encode("utf-8"), "strong_picks_graded.csv", "text/csv")
 
-    if st.button("Clear tracker in this browser session"):
-        st.session_state["strong_pick_tracker"] = pd.DataFrame()
-        st.success("Strong Pick Tracker cleared for this session.")
-        st.rerun()
+    st.caption(f"Strong picks are saved in: `{STRONG_PICKS_FILE}`. Synced official results are saved in: `{DAILY_RESULTS_FILE}`.")
+    col_reset1, col_reset2 = st.columns(2)
+    with col_reset1:
+        if st.button("Reset strong picks permanently"):
+            reset_strong_picks()
+            st.session_state["strong_pick_tracker"] = pd.DataFrame()
+            st.success("Strong Pick Tracker reset.")
+            st.rerun()
+    with col_reset2:
+        if st.button("Reset saved daily results"):
+            reset_daily_results()
+            st.success("Saved daily results reset.")
+            st.rerun()
 
 
 elif page == "Results Checker":
@@ -1292,11 +1337,15 @@ elif page == "Results Checker":
         st.warning("No official result rows returned for that date/period.")
         st.stop()
 
+    # Persist official results whenever this page is opened/refreshed.
+    saved_results = save_daily_results(result_df.assign(synced_at_lagos=pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")))
+
     rcols = st.columns(4)
     rcols[0].metric("Matches", f"{len(result_df):,}")
     rcols[1].metric("Finished", f"{(result_df['status'] == 'Finished').sum():,}")
     rcols[2].metric("Live", f"{(result_df['status'] == 'Live').sum():,}")
     rcols[3].metric("Scheduled", f"{(result_df['status'] == 'Scheduled').sum():,}")
+    st.caption(f"Auto-saved official result rows in local app storage: {len(saved_results):,}")
 
     st.subheader("Official result feed")
     filter_text = st.text_input("Search player/location/match id", value="")
