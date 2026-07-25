@@ -10,6 +10,8 @@ It includes:
 - official Setka results/live-score checker with auto-refresh option
 - automatic grading for saved/uploaded prediction snapshots
 - multi-sport hub for football, basketball, tennis, baseball, hockey, and American football scaffolds
+- reference links for Flashscore, SofaScore, and BetExplorer with a compliant manual-import plan
+- multi-sport CSV import page for permitted exports/manual data
 - smart stake calculator with edge, EV, and safer fractional-Kelly sizing
 - bet slip tools for combined odds, payout, risk level, and CSV export
 - transparent rule-blend prediction
@@ -30,6 +32,12 @@ It includes:
 - Setka Cup active now
 - Football, basketball, tennis, baseball, ice hockey, and American football scaffolds
 - Roadmap generator for adding each new sport with permitted data/API feeds
+
+### Multi-Sport CSV Import
+
+- Upload permitted/manual CSV exports from any sport
+- Quick sport/league counts and score-total distribution
+- CSV template download for football, basketball, tennis, and other sports
 
 ### Smart Stake Calc
 

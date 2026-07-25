@@ -62,8 +62,34 @@ SPORTS = [
 ]
 
 
+REFERENCE_SCORE_SITES = [
+    {
+        "name": "Flashscore",
+        "url": "https://www.flashscore.com/",
+        "best_for": "Live scores, fixtures, form, fast result checking",
+        "integration_status": "Reference link/manual cross-check unless licensed/API access is available",
+    },
+    {
+        "name": "SofaScore",
+        "url": "https://www.sofascore.com/",
+        "best_for": "Live scores, stats, momentum, event pages",
+        "integration_status": "Reference link/manual cross-check unless licensed/API access is available",
+    },
+    {
+        "name": "BetExplorer",
+        "url": "https://www.betexplorer.com/",
+        "best_for": "Historical odds/results reference and bookmaker comparison",
+        "integration_status": "Reference link/manual cross-check unless licensed/API access is available",
+    },
+]
+
+
 def sports_dataframe() -> pd.DataFrame:
     return pd.DataFrame(SPORTS)
+
+
+def reference_sites_dataframe() -> pd.DataFrame:
+    return pd.DataFrame(REFERENCE_SCORE_SITES)
 
 
 def supported_sport_names() -> list[str]:
