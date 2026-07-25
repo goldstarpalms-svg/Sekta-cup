@@ -185,6 +185,7 @@ with st.sidebar:
             "Live Predictions",
             "Live Match Center",
             "Owner Edge Engine",
+            "Strong Pick Tracker",
             "Results Checker",
             "Match Predictor",
             "Accuracy Lab",
@@ -357,9 +358,11 @@ def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line
         "total_pick": total_pick,
         "total_probability": total_prob,
         "expected_total_points": pred["expected_total_points"],
+        "total_points_line": float(total_points_line),
         "first_set_pick": first_pick,
         "first_set_probability": first_prob,
         "expected_first_set_points": pred["expected_first_set_points"],
+        "first_set_line": float(first_set_line),
         "sets_pick": sets_pick,
         "sets_probability": sets_prob,
         "expected_sets_played": pred["expected_sets_played"],
@@ -584,6 +587,49 @@ def grade_pick(prediction: str | None, actual: str | None) -> str:
     return "✅" if str(prediction).strip() == str(actual).strip() else "❌"
 
 
+def save_strong_picks_to_tracker(frame: pd.DataFrame, source: str) -> int:
+    if frame is None or frame.empty:
+        return 0
+    saved = frame.copy()
+    saved["saved_at_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
+    saved["tracker_source"] = source
+    old = st.session_state.get("strong_pick_tracker", pd.DataFrame())
+    combined = pd.concat([old, saved], ignore_index=True)
+    if "match_id" in combined.columns and "best_market" in combined.columns:
+        combined = combined.drop_duplicates(subset=["match_id", "best_market", "best_pick", "saved_at_lagos"], keep="last")
+    st.session_state["strong_pick_tracker"] = combined
+    return len(saved)
+
+
+def grade_best_pick(row: pd.Series) -> tuple[str, str | None]:
+    market = str(row.get("best_market", ""))
+    pick = str(row.get("best_pick", ""))
+    if pd.isna(row.get("status")) or str(row.get("status")) not in ["Finished", "Technical"]:
+        return "Pending", None
+    if market == "Winner":
+        actual = row.get("winner") or None
+        return grade_pick(row.get("winner_pick"), actual), actual
+    if market == "Total":
+        line = float(row.get("total_points_line", 75.5) or 75.5)
+        if pd.isna(row.get("total_points")):
+            return "Pending", None
+        actual = "Over" if float(row.get("total_points")) > line else "Under"
+        return grade_pick(row.get("total_pick"), actual), f"{actual} {line}"
+    if market == "1st Set":
+        line = float(row.get("first_set_line", 18.5) or 18.5)
+        if pd.isna(row.get("first_set_total")):
+            return "Pending", None
+        actual = "Over" if float(row.get("first_set_total")) > line else "Under"
+        return grade_pick(row.get("first_set_pick"), actual), f"{actual} {line}"
+    if market == "Sets":
+        line = float(row.get("sets_line", 3.5) or 3.5)
+        if pd.isna(row.get("sets_played")):
+            return "Pending", None
+        actual = "Over" if float(row.get("sets_played")) > line else "Under"
+        return grade_pick(row.get("sets_pick"), actual), f"{actual} {line}"
+    return "Pending", None
+
+
 if page == "Home":
     st.markdown(
         """
@@ -744,6 +790,9 @@ elif page == "Setka Trading Desk":
         st.info("No GREEN opportunities right now. In Protection Mode this is normal. Wait for cleaner spots.")
     else:
         st.dataframe(green_display, use_container_width=True, height=300)
+        if st.button("Save GREEN picks to Strong Pick Tracker", key="save_trading_green"):
+            count = save_strong_picks_to_tracker(green, "Setka Trading Desk")
+            st.success(f"Saved {count} GREEN picks to Strong Pick Tracker.")
 
     st.subheader("🧠 Model health")
     h1, h2, h3, h4 = st.columns(4)
@@ -1084,6 +1133,9 @@ elif page == "Owner Edge Engine":
         st.info("No GREEN picks right now. That is intentional: the owner engine protects bankroll by waiting.")
     else:
         st.dataframe(green_display, use_container_width=True, height=320)
+        if st.button("Save GREEN picks to Strong Pick Tracker", key="save_owner_green"):
+            count = save_strong_picks_to_tracker(green, "Owner Edge Engine")
+            st.success(f"Saved {count} GREEN picks to Strong Pick Tracker.")
 
     with st.expander("Full decision board: WATCH and NO BET", expanded=False):
         full_cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "owner_decision", "minimum_value_odds", "confidence", "upset_risk", "upset_risk_flags", "reason"]
@@ -1101,6 +1153,92 @@ elif page == "Owner Edge Engine":
     )
 
     st.caption("Owner rule: if bookmaker odds are below minimum value odds, it is a NO BET even if the model likes the pick.")
+
+
+elif page == "Strong Pick Tracker":
+    st.title("📌 Strong Pick Tracker")
+    st.markdown("Track results only for GREEN/strong picks saved from the Trading Desk or Owner Edge Engine.")
+
+    tracker = st.session_state.get("strong_pick_tracker", pd.DataFrame())
+    upload = st.file_uploader("Optional: upload a previously downloaded strong-picks CSV", type=["csv"], key="strong_tracker_upload")
+    if upload is not None:
+        try:
+            uploaded_tracker = pd.read_csv(upload)
+            tracker = pd.concat([tracker, uploaded_tracker], ignore_index=True)
+            st.session_state["strong_pick_tracker"] = tracker
+            st.success(f"Loaded {len(uploaded_tracker):,} uploaded strong picks.")
+        except Exception as exc:
+            st.exception(exc)
+
+    if tracker.empty:
+        st.info("No strong picks saved yet. Go to Setka Trading Desk or Owner Edge Engine and click 'Save GREEN picks to Strong Pick Tracker'.")
+        st.stop()
+
+    today_lagos = pd.Timestamp.now(tz="Africa/Lagos").date()
+    c1, c2, c3 = st.columns([1, 1, 1.2])
+    with c1:
+        track_date = st.date_input("Result date", value=today_lagos, key="strong_track_date")
+    with c2:
+        period_label = st.selectbox("Day period", ["All", "Morning", "Evening", "Night"], index=0, key="strong_track_period")
+        period_map = {"All": None, "Morning": 1, "Evening": 2, "Night": 3}
+    with c3:
+        if st.button("Refresh and grade strong picks", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+
+    try:
+        result_df = load_official_results(str(track_date), period_map[period_label])
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    track = tracker.copy()
+    if "match_id" in track.columns:
+        track["match_id"] = pd.to_numeric(track["match_id"], errors="coerce")
+    result_for_merge = result_df.copy()
+    result_for_merge["actual_match"] = result_for_merge["player1"] + " vs " + result_for_merge["player2"]
+    merged = track.merge(result_for_merge, on="match_id", how="left", suffixes=("_pick", "_result"))
+
+    grades = merged.apply(grade_best_pick, axis=1, result_type="expand")
+    merged["best_pick_grade"] = grades[0]
+    merged["actual_best_market_result"] = grades[1]
+
+    finished = merged.loc[merged["best_pick_grade"].isin(["✅", "❌"])]
+    wins = int((finished["best_pick_grade"] == "✅").sum()) if not finished.empty else 0
+    losses = int((finished["best_pick_grade"] == "❌").sum()) if not finished.empty else 0
+    pending = int((merged["best_pick_grade"] == "Pending").sum())
+    accuracy = wins / len(finished) if len(finished) else None
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Tracked picks", f"{len(merged):,}")
+    m2.metric("Won", f"{wins:,}")
+    m3.metric("Lost", f"{losses:,}")
+    m4.metric("Pending", f"{pending:,}")
+    m5.metric("Strong-pick accuracy", format_percent(accuracy) if accuracy is not None else "-")
+
+    st.subheader("Strong pick results")
+    cols = [
+        "saved_at_lagos", "tracker_source", "time_lagos", "location_pick", "match", "best_market", "best_pick",
+        "best_probability", "minimum_value_odds", "stake_cap", "max_suggested_stake", "confidence", "upset_risk",
+        "status", "winner", "set_scores", "total_points", "first_set_total", "sets_played",
+        "actual_best_market_result", "best_pick_grade", "match_id"
+    ]
+    visible = merged[[c for c in cols if c in merged.columns]].copy()
+    for c in ["best_probability"]:
+        if c in visible:
+            visible[c] = visible[c].map(lambda x: f"{x:.1%}" if pd.notna(x) and not isinstance(x, str) else x)
+    st.dataframe(visible, use_container_width=True, height=520)
+
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button("Download tracked strong picks CSV", tracker.to_csv(index=False).encode("utf-8"), "strong_picks_saved.csv", "text/csv")
+    with dl2:
+        st.download_button("Download graded results CSV", merged.to_csv(index=False).encode("utf-8"), "strong_picks_graded.csv", "text/csv")
+
+    if st.button("Clear tracker in this browser session"):
+        st.session_state["strong_pick_tracker"] = pd.DataFrame()
+        st.success("Strong Pick Tracker cleared for this session.")
+        st.rerun()
 
 
 elif page == "Results Checker":

@@ -6,6 +6,7 @@ It includes:
 
 - official Setka upcoming-match feed integration
 - Setka Trading Desk with live ticker, protection mode, stop-loss, bankroll caps, and GREEN/WATCH/NO BET decisions
+- Strong Pick Tracker that saves and grades only GREEN/strong picks against official Setka results
 - live Setka prediction board with confidence filters, pick-strength labels, mobile cards, and set-count Over/Under
 - Live Match Center with in-play Setka scores, set scores, active player, auto-refresh, and official viewing links
 - Owner Edge Engine with GREEN/WATCH/NO BET decisions, minimum value odds, and bankroll caps
@@ -57,6 +58,13 @@ It includes:
 - Daily stop-loss, daily risk cap, and stake caps
 - GREEN/WATCH/NO BET decisions with minimum value odds
 - Designed to reduce chasing after back-to-back losses
+
+### Strong Pick Tracker
+
+- Saves GREEN picks from Setka Trading Desk or Owner Edge Engine
+- Grades only the saved strong picks against official Setka results
+- Tracks won/lost/pending and strong-pick accuracy
+- Supports CSV download/upload so the owner can keep records
 
 ### Live Match Center
 
