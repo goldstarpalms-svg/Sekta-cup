@@ -5,6 +5,7 @@ Interactive Streamlit app for Setka Cup/table-tennis analysis, built from the up
 It includes:
 
 - official Setka upcoming-match feed integration
+- Setka Trading Desk with live ticker, protection mode, stop-loss, bankroll caps, and GREEN/WATCH/NO BET decisions
 - live Setka prediction board with confidence filters, pick-strength labels, mobile cards, and set-count Over/Under
 - Live Match Center with in-play Setka scores, set scores, active player, auto-refresh, and official viewing links
 - Owner Edge Engine with GREEN/WATCH/NO BET decisions, minimum value odds, and bankroll caps
@@ -47,6 +48,15 @@ It includes:
 - Paste multiple decimal odds for table-tennis selections
 - Calculate combined odds, implied probability, payout, and risk level
 - Simple split-stake planning and CSV export
+
+### Setka Trading Desk
+
+- Premium command center for the owner
+- Live match ticker and upcoming edge scan
+- Protection/Balanced/Aggressive modes
+- Daily stop-loss, daily risk cap, and stake caps
+- GREEN/WATCH/NO BET decisions with minimum value odds
+- Designed to reduce chasing after back-to-back losses
 
 ### Live Match Center
 

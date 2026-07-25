@@ -113,6 +113,19 @@ CUSTOM_CSS = """
 .badge-medium { color: #F59E0B; font-weight: 900; }
 .badge-watch { color: #38BDF8; font-weight: 900; }
 .badge-avoid { color: #EF4444; font-weight: 900; }
+.terminal-panel {
+    border: 1px solid rgba(34, 197, 94, 0.28);
+    border-radius: 22px;
+    padding: 1rem;
+    background: linear-gradient(135deg, rgba(2, 6, 23, 0.92), rgba(15, 23, 42, 0.75));
+    box-shadow: 0 0 25px rgba(34, 197, 94, 0.08);
+    margin-bottom: 0.8rem;
+}
+.green-card { border-left: 5px solid #22C55E; }
+.watch-card { border-left: 5px solid #F59E0B; }
+.nobet-card { border-left: 5px solid #EF4444; }
+.terminal-title { font-size: 1.1rem; font-weight: 900; }
+.terminal-value { font-size: 1.35rem; font-weight: 900; }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -168,6 +181,7 @@ with st.sidebar:
         "Go to",
         [
             "Home",
+            "Setka Trading Desk",
             "Live Predictions",
             "Live Match Center",
             "Owner Edge Engine",
@@ -605,6 +619,149 @@ if page == "Home":
         st.markdown('<div class="feature-card"><h3>🎯 Accuracy Lab</h3><p>Backtest recent Setka matches, discover stronger probability filters, and reduce weak picks.</p></div>', unsafe_allow_html=True)
 
     st.info("This app is for analytical decision support. It does not guarantee results and is not financial advice.")
+
+
+elif page == "Setka Trading Desk":
+    st.title("💎 Setka Trading Desk")
+    st.markdown("Premium owner terminal: live ticker, best value picks, NO BET zone, bankroll protection, and model health.")
+
+    st.error("If you are losing back-to-back: stop chasing. Use this page in Protection Mode and accept NO BET when the edge is not clean.")
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    with st.sidebar:
+        st.divider()
+        st.caption("Trading Desk controls")
+        desk_mode = st.selectbox("Mode", ["Protection Mode", "Balanced Mode", "Aggressive Mode"], index=0)
+        desk_auto_refresh = st.checkbox("Auto-refresh desk", value=True)
+        desk_refresh_seconds = st.selectbox("Desk refresh every", [10, 15, 30, 60], index=1)
+    if desk_auto_refresh:
+        enable_browser_auto_refresh(desk_refresh_seconds)
+
+    d1, d2, d3, d4, d5 = st.columns(5)
+    with d1:
+        desk_bankroll = st.number_input("Bankroll", min_value=0.0, value=10000.0, step=500.0, key="desk_bankroll")
+    with d2:
+        daily_loss_limit_pct = st.slider("Daily stop-loss %", 1, 30, 10, 1, key="desk_loss_limit") / 100
+    with d3:
+        losses_today = st.number_input("Losses today", min_value=0.0, value=0.0, step=100.0, key="desk_losses")
+    with d4:
+        daily_risk_cap_pct = st.slider("Daily risk cap %", 1, 30, 8, 1, key="desk_risk_cap") / 100
+    with d5:
+        if st.button("Refresh desk", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+
+    if desk_mode == "Protection Mode":
+        min_green_score, min_green_prob, required_edge_buffer, max_pick_stake_pct = 0.76, 0.62, 0.05, 0.005
+    elif desk_mode == "Balanced Mode":
+        min_green_score, min_green_prob, required_edge_buffer, max_pick_stake_pct = 0.72, 0.60, 0.03, 0.010
+    else:
+        min_green_score, min_green_prob, required_edge_buffer, max_pick_stake_pct = 0.68, 0.58, 0.02, 0.015
+
+    stop_loss_amount = desk_bankroll * daily_loss_limit_pct
+    daily_risk_cap = desk_bankroll * daily_risk_cap_pct
+    stop_active = losses_today >= stop_loss_amount and stop_loss_amount > 0
+    remaining_loss_room = max(0.0, stop_loss_amount - losses_today)
+
+    try:
+        live_feed = load_official_live()
+    except Exception:
+        live_feed = pd.DataFrame()
+    try:
+        upcoming = load_official_nearest().head(30)
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    # Live ticker
+    st.subheader("🔴 Live ticker")
+    if live_feed.empty:
+        st.info("No live matches returned right now.")
+    else:
+        live_view = live_feed.copy()
+        live_view["match"] = live_view["player1"] + " vs " + live_view["player2"]
+        live_view["score"] = live_view["player1_score"].fillna(0).astype(int).astype(str) + " - " + live_view["player2_score"].fillna(0).astype(int).astype(str)
+        ticker_cols = ["start_time_lagos", "location", "status", "match", "score", "set_scores", "active_player"]
+        st.dataframe(live_view[[c for c in ticker_cols if c in live_view.columns]].head(12), use_container_width=True, height=260)
+
+    # Upcoming edge scan
+    rows = []
+    for _, match_row in upcoming.iterrows():
+        if match_row.get("player1") and match_row.get("player2"):
+            rows.append(prediction_pick_row(match_row, 18.5, 75.5, 3.5))
+    desk_df = apply_pick_strengths(pd.DataFrame(rows))
+    if desk_df.empty:
+        st.warning("No upcoming matches available for desk scan.")
+        st.stop()
+
+    desk_df["edge_score"] = desk_df.apply(owner_edge_score, axis=1)
+    desk_df["fair_odds"] = desk_df["best_probability"].map(fair_decimal)
+    desk_df["minimum_value_odds"] = desk_df["best_probability"].map(lambda p: minimum_value_odds(p, required_edge_buffer))
+    desk_df["reason"] = desk_df.apply(owner_reason, axis=1)
+
+    def desk_decision(row):
+        if stop_active:
+            return "STOP"
+        if row.get("best_market") == "Winner" and row.get("upset_risk") == "High":
+            return "NO BET"
+        if row.get("edge_score", 0) >= min_green_score and row.get("best_probability", 0) >= min_green_prob and row.get("best_strength") in ["Strong", "Medium"]:
+            return "GREEN"
+        if row.get("edge_score", 0) >= (min_green_score - 0.08) and row.get("best_probability", 0) >= 0.56:
+            return "WATCH"
+        return "NO BET"
+
+    desk_df["desk_decision"] = desk_df.apply(desk_decision, axis=1)
+    desk_df["stake_cap"] = desk_df.apply(
+        lambda r: 0.0 if r["desk_decision"] != "GREEN" else min(desk_bankroll * max_pick_stake_pct, daily_risk_cap, remaining_loss_room if remaining_loss_room > 0 else desk_bankroll * max_pick_stake_pct),
+        axis=1,
+    )
+
+    green = desk_df.loc[desk_df["desk_decision"] == "GREEN"].sort_values("edge_score", ascending=False)
+    watch = desk_df.loc[desk_df["desk_decision"] == "WATCH"].sort_values("edge_score", ascending=False)
+    nobet = desk_df.loc[desk_df["desk_decision"].isin(["NO BET", "STOP"])]
+
+    st.subheader("🛡️ Bankroll protection")
+    p1, p2, p3, p4, p5 = st.columns(5)
+    p1.metric("Mode", desk_mode)
+    p2.metric("Stop-loss", f"{stop_loss_amount:,.2f}")
+    p3.metric("Loss room left", f"{remaining_loss_room:,.2f}")
+    p4.metric("Daily risk cap", f"{daily_risk_cap:,.2f}")
+    p5.metric("Status", "STOP" if stop_active else "SAFE")
+    if stop_active:
+        st.error("STOP MODE ACTIVE: Daily loss limit reached. The desk will not recommend new stakes.")
+
+    st.subheader("💚 GREEN opportunities")
+    cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "minimum_value_odds", "stake_cap", "confidence", "upset_risk", "reason"]
+    green_display = green[cols].copy()
+    for c in ["best_probability", "edge_score"]:
+        green_display[c] = green_display[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+    for c in ["minimum_value_odds", "stake_cap"]:
+        green_display[c] = green_display[c].map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+    if green_display.empty:
+        st.info("No GREEN opportunities right now. In Protection Mode this is normal. Wait for cleaner spots.")
+    else:
+        st.dataframe(green_display, use_container_width=True, height=300)
+
+    st.subheader("🧠 Model health")
+    h1, h2, h3, h4 = st.columns(4)
+    h1.metric("Scanned", f"{len(desk_df):,}")
+    h2.metric("GREEN", f"{len(green):,}")
+    h3.metric("WATCH", f"{len(watch):,}")
+    h4.metric("NO BET/STOP", f"{len(nobet):,}")
+
+    with st.expander("WATCH and NO BET board", expanded=False):
+        full_cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "desk_decision", "minimum_value_odds", "confidence", "upset_risk", "upset_risk_flags", "reason"]
+        full = desk_df[full_cols].sort_values(["desk_decision", "edge_score"], ascending=[True, False]).copy()
+        for c in ["best_probability", "edge_score"]:
+            full[c] = full[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+        full["minimum_value_odds"] = full["minimum_value_odds"].map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+        st.dataframe(full, use_container_width=True, height=520)
+
+    st.download_button("Download Trading Desk CSV", desk_df.to_csv(index=False).encode("utf-8"), "setka_trading_desk.csv", "text/csv")
+    st.caption("Professional rule: no odds value, no bet. Stop-loss reached, no bet. Weak edge, no bet.")
 
 
 elif page == "Live Predictions":
