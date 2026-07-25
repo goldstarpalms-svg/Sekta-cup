@@ -724,16 +724,110 @@ def journal_summary(frame: pd.DataFrame) -> dict[str, float | int | None]:
 
 
 def save_strong_picks_to_tracker(frame: pd.DataFrame, source: str) -> int:
-    """Persist GREEN/strong picks until the user resets the tracker."""
+    """Persist GREEN/strong picks until the user resets the tracker.
+
+    Uses deterministic duplicate checking so page refreshes do not duplicate rows
+    or create endless GitHub commits.
+    """
     if frame is None or frame.empty:
         return 0
     saved = frame.copy()
     saved["saved_at_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
     saved["tracker_source"] = source
-    before = len(load_strong_picks())
+    existing = load_strong_picks()
+    subset = ["match_id", "best_market", "best_pick"]
+    if not existing.empty and all(c in existing.columns for c in subset):
+        existing_keys = set(existing[subset].astype(str).agg("|".join, axis=1))
+        saved_keys = saved[subset].astype(str).agg("|".join, axis=1)
+        saved = saved.loc[~saved_keys.isin(existing_keys)].copy()
+    if saved.empty:
+        combined = existing
+        st.session_state["strong_pick_tracker"] = combined
+        return 0
     combined = save_strong_picks(saved)
     st.session_state["strong_pick_tracker"] = combined
-    return max(0, len(combined) - before)
+    auto_create_journal_from_picks(saved, source=source)
+    return len(saved)
+
+
+def auto_create_journal_from_picks(frame: pd.DataFrame, source: str = "auto") -> int:
+    """Create pending bankroll journal records from strong picks automatically."""
+    if frame is None or frame.empty:
+        return 0
+    existing = load_bankroll_journal()
+    existing_ids = set(existing["journal_id"].astype(str)) if not existing.empty and "journal_id" in existing.columns else set()
+    rows = []
+    for _, r in frame.iterrows():
+        match_id = str(r.get("match_id", ""))
+        market = str(r.get("best_market", ""))
+        pick = str(r.get("best_pick", ""))
+        journal_id = f"strong-{match_id}-{market}-{pick}"
+        if journal_id in existing_ids:
+            continue
+        stake = r.get("stake_cap", r.get("max_suggested_stake", 0.0))
+        try:
+            stake = float(stake) if pd.notna(stake) else 0.0
+        except Exception:
+            stake = 0.0
+        odds_taken = r.get("minimum_value_odds", None)
+        try:
+            odds_taken = float(odds_taken) if pd.notna(odds_taken) else None
+        except Exception:
+            odds_taken = None
+        rows.append({
+            "journal_id": journal_id,
+            "date": str(r.get("date_lagos", pd.Timestamp.now(tz="Africa/Lagos").date())),
+            "saved_at_lagos": pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S"),
+            "match_id": match_id,
+            "match": r.get("match", ""),
+            "market": market,
+            "pick": pick,
+            "stake": stake,
+            "odds_taken": odds_taken,
+            "result": "Pending",
+            "profit_loss": None,
+            "bookmaker": "",
+            "value_note": "Auto-created from strong pick",
+            "source": source,
+        })
+    if not rows:
+        return 0
+    save_bankroll_journal(pd.DataFrame(rows))
+    return len(rows)
+
+
+def update_journal_from_graded_picks(graded: pd.DataFrame) -> int:
+    """When Strong Pick Tracker grades results, update matching journal rows."""
+    if graded is None or graded.empty:
+        return 0
+    journal = load_bankroll_journal()
+    if journal.empty or "journal_id" not in journal.columns:
+        return 0
+    updates = []
+    for _, r in graded.iterrows():
+        grade = r.get("best_pick_grade")
+        if grade not in ["✅", "❌"]:
+            continue
+        market = str(r.get("best_market", ""))
+        pick = str(r.get("best_pick", ""))
+        match_id = str(r.get("match_id", ""))
+        journal_id = f"strong-{match_id}-{market}-{pick}"
+        matched = journal.loc[journal["journal_id"].astype(str) == journal_id]
+        if matched.empty:
+            continue
+        base = matched.iloc[-1].to_dict()
+        result = "Won" if grade == "✅" else "Lost"
+        stake = float(base.get("stake", 0) or 0)
+        odds = float(base.get("odds_taken", 0) or 0) if pd.notna(base.get("odds_taken")) else 0
+        base["result"] = result
+        base["profit_loss"] = bet_profit_loss(stake, odds, result)
+        base["settled_at_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
+        base["actual_best_market_result"] = r.get("actual_best_market_result")
+        updates.append(base)
+    if not updates:
+        return 0
+    save_bankroll_journal(pd.DataFrame(updates))
+    return len(updates)
 
 
 def expand_setka_result_dates(date_texts: list[str]) -> list[str]:
@@ -991,6 +1085,7 @@ elif page == "Setka Trading Desk":
     green = desk_df.loc[desk_df["desk_decision"] == "GREEN"].sort_values("edge_score", ascending=False)
     watch = desk_df.loc[desk_df["desk_decision"] == "WATCH"].sort_values("edge_score", ascending=False)
     nobet = desk_df.loc[desk_df["desk_decision"].isin(["NO BET", "STOP"])]
+    auto_saved_green = save_strong_picks_to_tracker(green, "Setka Trading Desk Auto") if not green.empty else 0
 
     st.subheader("🛡️ Bankroll protection")
     p1, p2, p3, p4, p5 = st.columns(5)
@@ -1012,10 +1107,12 @@ elif page == "Setka Trading Desk":
     if green_display.empty:
         st.info("No GREEN opportunities right now. In Protection Mode this is normal. Wait for cleaner spots.")
     else:
+        if auto_saved_green:
+            st.success(f"Auto-saved {auto_saved_green} new GREEN pick(s) to Strong Pick Tracker and Bankroll Journal.")
         st.dataframe(green_display, use_container_width=True, height=300)
-        if st.button("Save GREEN picks to Strong Pick Tracker", key="save_trading_green"):
+        if st.button("Force save GREEN picks again", key="save_trading_green"):
             count = save_strong_picks_to_tracker(green, "Setka Trading Desk")
-            st.success(f"Saved {count} GREEN picks to Strong Pick Tracker.")
+            st.success(f"Saved {count} new GREEN picks to Strong Pick Tracker.")
 
     st.subheader("🧠 Model health")
     h1, h2, h3, h4 = st.columns(4)
@@ -1344,6 +1441,7 @@ elif page == "Owner Edge Engine":
 
     green = edge_df.loc[edge_df["owner_decision"] == "GREEN"].sort_values("edge_score", ascending=False)
     watch = edge_df.loc[edge_df["owner_decision"] == "WATCH"].sort_values("edge_score", ascending=False)
+    auto_saved_owner_green = save_strong_picks_to_tracker(green, "Owner Edge Engine Auto") if not green.empty else 0
 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Matches scanned", f"{len(edge_df):,}")
@@ -1361,10 +1459,12 @@ elif page == "Owner Edge Engine":
     if green_display.empty:
         st.info("No GREEN picks right now. That is intentional: the owner engine protects bankroll by waiting.")
     else:
+        if auto_saved_owner_green:
+            st.success(f"Auto-saved {auto_saved_owner_green} new GREEN pick(s) to Strong Pick Tracker and Bankroll Journal.")
         st.dataframe(green_display, use_container_width=True, height=320)
-        if st.button("Save GREEN picks to Strong Pick Tracker", key="save_owner_green"):
+        if st.button("Force save GREEN picks again", key="save_owner_green"):
             count = save_strong_picks_to_tracker(green, "Owner Edge Engine")
-            st.success(f"Saved {count} GREEN picks to Strong Pick Tracker.")
+            st.success(f"Saved {count} new GREEN picks to Strong Pick Tracker.")
 
     with st.expander("Full decision board: WATCH and NO BET", expanded=False):
         full_cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "owner_decision", "minimum_value_odds", "best_market_confidence", "winner_agreement", "match_fatigue_risk", "confidence", "upset_risk", "upset_risk_flags", "reason"]
@@ -1389,11 +1489,11 @@ elif page == "Strong Pick Tracker":
     st.markdown("Automatically grades only GREEN/strong picks saved from the Trading Desk or Owner Edge Engine. It checks official Setka results for the saved pick dates — no weak picks mixed in.")
     if github_storage_enabled():
         storage_branch = os.getenv("GITHUB_STORAGE_BRANCH", "app-storage")
-        st.success(f"Permanent GitHub storage is active on branch `{storage_branch}`. Strong picks/results will persist across redeploys until reset.")
+        st.success(f"Permanent GitHub storage is active on branch `{storage_branch}`. Strong picks, results, and journal records should persist across refresh/redeploy until reset.")
         if storage_branch == "main":
             st.warning("Storage is set to main. Use `app-storage` branch to avoid Streamlit redeploying every time a pick is saved.")
     else:
-        st.warning("GitHub permanent storage is not configured yet. Local storage may reset on Streamlit reboot/redeploy. Add GITHUB_STORAGE_TOKEN in Streamlit secrets for permanent saving.")
+        st.error("Permanent GitHub storage is NOT configured. History may disappear on reboot/redeploy. Add GITHUB_STORAGE_TOKEN, GITHUB_STORAGE_REPO, GITHUB_STORAGE_BRANCH=app-storage in Streamlit secrets.")
 
     tracker = load_strong_picks()
     session_tracker = st.session_state.get("strong_pick_tracker", pd.DataFrame())
@@ -1476,6 +1576,7 @@ elif page == "Strong Pick Tracker":
     grades = merged.apply(grade_best_pick, axis=1, result_type="expand")
     merged["best_pick_grade"] = grades[0]
     merged["actual_best_market_result"] = grades[1]
+    journal_updates = update_journal_from_graded_picks(merged)
 
     finished = merged.loc[merged["best_pick_grade"].isin(["✅", "❌"])]
     wins = int((finished["best_pick_grade"] == "✅").sum()) if not finished.empty else 0
@@ -1490,7 +1591,7 @@ elif page == "Strong Pick Tracker":
     m4.metric("Pending", f"{pending:,}")
     m5.metric("Strong-pick accuracy", format_percent(accuracy) if accuracy is not None else "-")
     matched_count = int(merged["status"].notna().sum()) if "status" in merged.columns else 0
-    st.caption(f"Auto-checked official Setka result date(s): {', '.join(dates_to_check)} | Result rows found: {len(result_df):,} | Matched tracked picks: {matched_count:,}")
+    st.caption(f"Auto-checked official Setka result date(s): {', '.join(dates_to_check)} | Result rows found: {len(result_df):,} | Matched tracked picks: {matched_count:,} | Journal auto-updates: {journal_updates:,}")
     if pending:
         st.info("Pending means the match has not finished yet, or the official result has not appeared in the Setka feed. The tracker now checks a wider ±3 day Setka window plus the live widget.")
         unmatched = merged.loc[merged.get("status", pd.Series(index=merged.index)).isna(), [c for c in ["match_id", "time_lagos", "match", "best_market", "best_pick", "date_lagos"] if c in merged.columns]]

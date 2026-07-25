@@ -74,8 +74,10 @@ It includes:
 
 ### Bankroll Journal
 
+- Automatically creates pending journal records from GREEN/strong picks
 - Save actual bets from strong picks or manual entries
 - Track odds taken, stake, bookmaker, result, profit/loss, ROI, and daily P/L
+- Auto-updates journal results when Strong Pick Tracker grades saved picks
 - Checks whether odds taken met the model's minimum value odds
 - Supports CSV export and permanent storage when GitHub storage is configured
 
