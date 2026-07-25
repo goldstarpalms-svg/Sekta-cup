@@ -30,7 +30,9 @@ def _repo() -> str:
 
 
 def _branch() -> str:
-    return os.getenv("GITHUB_STORAGE_BRANCH", "main")
+    # Use a non-deploy branch by default so saving picks/results does not trigger
+    # Streamlit redeploys from main.
+    return os.getenv("GITHUB_STORAGE_BRANCH", "app-storage")
 
 
 def _storage_prefix() -> str:
@@ -40,6 +42,37 @@ def _storage_prefix() -> str:
 def github_path(file_name: str | Path) -> str:
     name = Path(file_name).name
     return f"{_storage_prefix().strip('/')}/{name}"
+
+
+def ensure_storage_branch() -> None:
+    """Create the storage branch from main if it does not exist.
+
+    This lets the app store CSV state in a branch that Streamlit is not watching.
+    """
+    branch = _branch()
+    repo = _repo()
+    headers = _headers()
+    ref_url = f"{GITHUB_API}/repos/{repo}/git/ref/heads/{branch}"
+    response = requests.get(ref_url, headers=headers, timeout=20)
+    if response.status_code == 200:
+        return
+    if response.status_code != 404:
+        response.raise_for_status()
+
+    base_branch = os.getenv("GITHUB_STORAGE_BASE_BRANCH", "main")
+    base_url = f"{GITHUB_API}/repos/{repo}/git/ref/heads/{base_branch}"
+    base_response = requests.get(base_url, headers=headers, timeout=20)
+    base_response.raise_for_status()
+    sha = base_response.json()["object"]["sha"]
+    create_response = requests.post(
+        f"{GITHUB_API}/repos/{repo}/git/refs",
+        headers=headers,
+        json={"ref": f"refs/heads/{branch}", "sha": sha},
+        timeout=20,
+    )
+    # 422 can happen if another app run created it at the same time.
+    if create_response.status_code not in (201, 422):
+        create_response.raise_for_status()
 
 
 def get_file(path: str) -> tuple[Optional[str], Optional[str]]:
@@ -55,6 +88,7 @@ def get_file(path: str) -> tuple[Optional[str], Optional[str]]:
 
 
 def put_file(path: str, content: str, message: str) -> None:
+    ensure_storage_branch()
     url = f"{GITHUB_API}/repos/{_repo()}/contents/{path}"
     _, sha = get_file(path)
     payload = {

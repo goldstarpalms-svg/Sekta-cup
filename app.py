@@ -1272,7 +1272,10 @@ elif page == "Strong Pick Tracker":
     st.title("📌 Strong Pick Tracker")
     st.markdown("Automatically grades only GREEN/strong picks saved from the Trading Desk or Owner Edge Engine. It checks official Setka results for the saved pick dates — no weak picks mixed in.")
     if github_storage_enabled():
-        st.success("Permanent GitHub storage is active. Strong picks/results will persist across redeploys until reset.")
+        storage_branch = os.getenv("GITHUB_STORAGE_BRANCH", "app-storage")
+        st.success(f"Permanent GitHub storage is active on branch `{storage_branch}`. Strong picks/results will persist across redeploys until reset.")
+        if storage_branch == "main":
+            st.warning("Storage is set to main. Use `app-storage` branch to avoid Streamlit redeploying every time a pick is saved.")
     else:
         st.warning("GitHub permanent storage is not configured yet. Local storage may reset on Streamlit reboot/redeploy. Add GITHUB_STORAGE_TOKEN in Streamlit secrets for permanent saving.")
 

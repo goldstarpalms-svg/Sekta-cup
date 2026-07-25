@@ -258,6 +258,19 @@ python scripts/live_predictions.py --limit 20
 python scripts/check_results.py --date 2026-07-25 --period all
 ```
 
+## Permanent tracker storage
+
+For Strong Pick Tracker and Daily Results Store to survive Streamlit redeploys, add GitHub-backed storage in Streamlit secrets:
+
+```toml
+GITHUB_STORAGE_TOKEN = "your_fine_grained_github_token"
+GITHUB_STORAGE_REPO = "goldstarpalms-svg/Sekta-cup"
+GITHUB_STORAGE_BRANCH = "app-storage"
+GITHUB_STORAGE_PREFIX = "data/app_state"
+```
+
+Use a fine-grained GitHub token with **Contents: Read and write** for this repo only. The app uses `app-storage` branch so saved picks/results do not trigger Streamlit redeploys from `main`.
+
 ## Add API keys
 
 ### Environment variables
