@@ -169,6 +169,7 @@ with st.sidebar:
         [
             "Home",
             "Live Predictions",
+            "Owner Edge Engine",
             "Results Checker",
             "Match Predictor",
             "Accuracy Lab",
@@ -499,6 +500,55 @@ def implied_probability(decimal_odds: float) -> float:
     return 1 / decimal_odds if decimal_odds and decimal_odds > 1 else 0.0
 
 
+def fair_decimal(probability: float) -> float | None:
+    if probability is None or pd.isna(probability) or probability <= 0:
+        return None
+    return 1 / float(probability)
+
+
+def minimum_value_odds(probability: float, edge_buffer: float = 0.03) -> float | None:
+    if probability is None or pd.isna(probability):
+        return None
+    usable_probability = max(0.01, float(probability) - float(edge_buffer))
+    return 1 / usable_probability
+
+
+def owner_edge_score(row: pd.Series) -> float:
+    prob = float(row.get("best_probability", 0) or 0)
+    confidence_bonus = {"High": 0.08, "Medium": 0.03, "Low": -0.05}.get(str(row.get("confidence", "")), 0)
+    risk_penalty = {"Low": 0.00, "Medium": 0.06, "High": 0.18}.get(str(row.get("upset_risk", "")), 0.08)
+    h2h_bonus = min(float(row.get("h2h_matches", 0) or 0), 60) / 1000
+    strength_bonus = {"Strong": 0.04, "Medium": 0.01, "Watch": -0.02, "Avoid": -0.10}.get(str(row.get("best_strength", "")), 0)
+    return max(0.0, min(1.0, prob + confidence_bonus + h2h_bonus + strength_bonus - risk_penalty))
+
+
+def owner_decision(row: pd.Series) -> str:
+    score = float(row.get("edge_score", 0) or 0)
+    prob = float(row.get("best_probability", 0) or 0)
+    if row.get("best_market") == "Winner" and row.get("upset_risk") == "High":
+        return "NO BET"
+    if score >= 0.72 and prob >= 0.60:
+        return "GREEN"
+    if score >= 0.64 and prob >= 0.57:
+        return "WATCH"
+    return "NO BET"
+
+
+def owner_reason(row: pd.Series) -> str:
+    reasons = []
+    if row.get("confidence") == "High":
+        reasons.append("high confidence")
+    if float(row.get("h2h_matches", 0) or 0) >= 10:
+        reasons.append("useful H2H sample")
+    if row.get("upset_risk") == "Low":
+        reasons.append("low upset risk")
+    if row.get("best_strength") in ["Strong", "Medium"]:
+        reasons.append(f"{row.get('best_strength')} model strength")
+    if not reasons:
+        reasons.append("price-dependent only")
+    return ", ".join(reasons)
+
+
 FORMER_PREDICTIONS = {
     804491: {"winner_pick": "Dmitri Gribcov", "total_pick": "Over", "first_set_pick": "Over"},
     804612: {"winner_pick": "Orest Hura", "total_pick": "Over", "first_set_pick": "Over"},
@@ -539,7 +589,7 @@ if page == "Home":
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.markdown('<div class="feature-card"><h3>🔴 Live Setka Predictions</h3><p>Upcoming official Setka matches with winner, total-points, first-set O/U, confidence, H2H, and pick-strength labels.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="feature-card"><h3>💎 Owner Edge Engine</h3><p>A strict no-bet-first control room that gives minimum value odds, bankroll caps, and only GREEN/WATCH/NO BET decisions.</p></div>', unsafe_allow_html=True)
     with c2:
         st.markdown('<div class="feature-card"><h3>✅ Setka Result Checker</h3><p>Official Setka scores, set totals, live status, and grading for prediction CSV snapshots.</p></div>', unsafe_allow_html=True)
     with c3:
@@ -714,6 +764,101 @@ elif page == "Live Predictions":
         )
 
     st.caption("Analytical estimates only — not guaranteed results or betting advice.")
+
+
+elif page == "Owner Edge Engine":
+    st.title("💎 Owner Edge Engine")
+    st.markdown("A strict Setka-only control room: fewer picks, minimum value odds, no-bet discipline, and bankroll caps.")
+    st.warning("This engine is built to reject weak matches. It cannot guarantee profit; the edge is in filtering and refusing bad prices.")
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    o1, o2, o3, o4, o5 = st.columns(5)
+    with o1:
+        owner_bankroll = st.number_input("Bankroll", min_value=0.0, value=10000.0, step=500.0, key="owner_bankroll")
+    with o2:
+        max_risk_pct = st.slider("Max stake %", 0.25, 5.0, 1.0, 0.25, key="owner_risk") / 100
+    with o3:
+        edge_buffer = st.slider("Required edge buffer", 1, 10, 3, 1, key="owner_edge_buffer") / 100
+    with o4:
+        owner_limit = st.slider("Matches to scan", 5, 50, 25, 5, key="owner_scan")
+    with o5:
+        if st.button("Refresh engine", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+
+    l1, l2, l3 = st.columns(3)
+    with l1:
+        owner_first_line = st.number_input("1st set line", 10.5, 35.5, 18.5, 0.5, key="owner_first_line")
+    with l2:
+        owner_total_line = st.number_input("Total line", 30.5, 140.5, 75.5, 0.5, key="owner_total_line")
+    with l3:
+        owner_sets_line = st.selectbox("Sets line", [3.5, 4.5], index=0, key="owner_sets_line")
+
+    try:
+        upcoming = load_official_nearest().head(owner_limit)
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    rows = []
+    for _, match_row in upcoming.iterrows():
+        if match_row.get("player1") and match_row.get("player2"):
+            rows.append(prediction_pick_row(match_row, owner_first_line, owner_total_line, owner_sets_line))
+    edge_df = apply_pick_strengths(pd.DataFrame(rows))
+    if edge_df.empty:
+        st.warning("No official Setka matches available right now.")
+        st.stop()
+
+    edge_df["edge_score"] = edge_df.apply(owner_edge_score, axis=1)
+    edge_df["owner_decision"] = edge_df.apply(owner_decision, axis=1)
+    edge_df["reason"] = edge_df.apply(owner_reason, axis=1)
+    edge_df["fair_odds"] = edge_df["best_probability"].map(fair_decimal)
+    edge_df["minimum_value_odds"] = edge_df["best_probability"].map(lambda p: minimum_value_odds(p, edge_buffer))
+    edge_df["max_suggested_stake"] = edge_df.apply(
+        lambda r: 0.0 if r["owner_decision"] == "NO BET" else min(owner_bankroll * max_risk_pct, owner_bankroll * max(0.0025, (r["edge_score"] - 0.58) / 18)),
+        axis=1,
+    )
+
+    green = edge_df.loc[edge_df["owner_decision"] == "GREEN"].sort_values("edge_score", ascending=False)
+    watch = edge_df.loc[edge_df["owner_decision"] == "WATCH"].sort_values("edge_score", ascending=False)
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Matches scanned", f"{len(edge_df):,}")
+    k2.metric("GREEN", f"{len(green):,}")
+    k3.metric("WATCH", f"{len(watch):,}")
+    k4.metric("NO BET", f"{(edge_df['owner_decision'] == 'NO BET').sum():,}")
+
+    st.subheader("GREEN picks — only if real odds are equal/above minimum value odds")
+    cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "fair_odds", "minimum_value_odds", "max_suggested_stake", "confidence", "upset_risk", "h2h_matches", "reason"]
+    green_display = green[cols].copy()
+    for c in ["best_probability", "edge_score"]:
+        green_display[c] = green_display[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+    for c in ["fair_odds", "minimum_value_odds", "max_suggested_stake"]:
+        green_display[c] = green_display[c].map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+    if green_display.empty:
+        st.info("No GREEN picks right now. That is intentional: the owner engine protects bankroll by waiting.")
+    else:
+        st.dataframe(green_display, use_container_width=True, height=320)
+
+    with st.expander("Full decision board: WATCH and NO BET", expanded=False):
+        full_cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "owner_decision", "minimum_value_odds", "confidence", "upset_risk", "upset_risk_flags", "reason"]
+        full = edge_df[full_cols].sort_values(["owner_decision", "edge_score"], ascending=[True, False]).copy()
+        for c in ["best_probability", "edge_score"]:
+            full[c] = full[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+        full["minimum_value_odds"] = full["minimum_value_odds"].map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+        st.dataframe(full, use_container_width=True, height=520)
+
+    st.download_button(
+        "Download owner edge report CSV",
+        data=edge_df.to_csv(index=False).encode("utf-8"),
+        file_name="owner_edge_report.csv",
+        mime="text/csv",
+    )
+
+    st.caption("Owner rule: if bookmaker odds are below minimum value odds, it is a NO BET even if the model likes the pick.")
 
 
 elif page == "Results Checker":
