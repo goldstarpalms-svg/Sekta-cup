@@ -169,6 +169,7 @@ with st.sidebar:
         [
             "Home",
             "Live Predictions",
+            "Live Match Center",
             "Owner Edge Engine",
             "Results Checker",
             "Match Predictor",
@@ -764,6 +765,90 @@ elif page == "Live Predictions":
         )
 
     st.caption("Analytical estimates only — not guaranteed results or betting advice.")
+
+
+elif page == "Live Match Center":
+    st.title("📺 Live Match Center")
+    st.markdown("Follow Setka matches currently being played: live score, set score, active player, and official viewing links.")
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    with st.sidebar:
+        st.divider()
+        st.caption("Live match center")
+        live_auto_refresh = st.checkbox("Auto-refresh live scores", value=True)
+        live_refresh_seconds = st.selectbox("Live refresh every", [10, 15, 30, 60], index=1)
+    if live_auto_refresh:
+        enable_browser_auto_refresh(live_refresh_seconds)
+
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        if st.button("Refresh live scores", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+    with c2:
+        st.link_button("Watch/Open official Setka site", OFFICIAL_SETKA_URL)
+    with c3:
+        st.caption("If the official stream is available in your region, use the official Setka link. We do not re-host or bypass live video restrictions.")
+
+    try:
+        live_df = load_official_live()
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    if live_df.empty:
+        st.info("No live Setka matches returned right now. Showing upcoming matches below.")
+        try:
+            upcoming_now = load_official_nearest().head(12)
+            st.dataframe(upcoming_now[[c for c in ["start_time_lagos", "location", "player1", "player2", "match_id"] if c in upcoming_now.columns]], use_container_width=True)
+        except Exception:
+            pass
+        st.stop()
+
+    live_df = live_df.copy()
+    live_df["match"] = live_df["player1"] + " vs " + live_df["player2"]
+    live_df["current_score"] = live_df["player1_score"].fillna(0).astype(int).astype(str) + " - " + live_df["player2_score"].fillna(0).astype(int).astype(str)
+    live_df["watch_link"] = OFFICIAL_SETKA_URL
+    live_df["schedule_link"] = live_df.apply(
+        lambda r: f"https://tabletennis.setkacup.com/en/schedule?hall={int(r['location_id']) if pd.notna(r.get('location_id')) else ''}&period={int(r['day_period']) if pd.notna(r.get('day_period')) else ''}&date={r.get('start_date_lagos', '')}",
+        axis=1,
+    )
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Live feed rows", f"{len(live_df):,}")
+    k2.metric("Currently live", f"{(live_df['status'] == 'Live').sum():,}" if "status" in live_df else "-")
+    k3.metric("With set score", f"{live_df['set_scores'].astype(str).ne('').sum():,}" if "set_scores" in live_df else "-")
+    k4.metric("Last refresh", pd.Timestamp.now(tz="Africa/Lagos").strftime("%H:%M:%S"))
+
+    st.subheader("Live / just-finished feed")
+    for _, r in live_df.sort_values(["start_time_lagos", "location"]).iterrows():
+        st.markdown(
+            f"""
+<div class="pick-card">
+  <div class="pick-title">🔴 {r.get('start_time_lagos', '')} • {r.get('match', '')}</div>
+  <div class="pick-meta">{r.get('location', '')} • {r.get('tournament', '')} • Match ID {r.get('match_id', '')}</div>
+  <div><b>Score:</b> {r.get('current_score', '')} &nbsp; | &nbsp; <b>Sets:</b> {r.get('set_scores', '') or 'In progress'} &nbsp; | &nbsp; <b>Active:</b> {r.get('active_player', '') or '-'}</div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+    cols = ["start_time_lagos", "location", "status", "match", "current_score", "set_scores", "active_player", "total_points", "first_set_total", "match_id"]
+    st.dataframe(live_df[[c for c in cols if c in live_df.columns]], use_container_width=True, height=420)
+
+    st.subheader("Official viewing links")
+    st.write("Use these buttons to open the official Setka site/schedule. Live video availability depends on Setka and your region.")
+    link_rows = live_df[["match", "watch_link", "schedule_link"]].head(10)
+    st.dataframe(link_rows, use_container_width=True)
+    st.download_button(
+        "Download live scores CSV",
+        data=live_df.to_csv(index=False).encode("utf-8"),
+        file_name="setka_live_scores.csv",
+        mime="text/csv",
+    )
 
 
 elif page == "Owner Edge Engine":

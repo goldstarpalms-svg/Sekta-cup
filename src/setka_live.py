@@ -224,6 +224,15 @@ def official_matches_to_frame(matches: list[dict[str, Any]]) -> pd.DataFrame:
     for match in matches or []:
         set_scores = match.get("setScores") or []
         winner = match.get("winner")
+        active_player_id = match.get("activePlayerId")
+        p1 = match.get("player1") or {}
+        p2 = match.get("player2") or {}
+        if active_player_id == p1.get("id"):
+            active_player = player_name(p1)
+        elif active_player_id == p2.get("id"):
+            active_player = player_name(p2)
+        else:
+            active_player = ""
         rows.append(
             {
                 "match_id": match.get("id") or match.get("matchId"),
@@ -233,6 +242,8 @@ def official_matches_to_frame(matches: list[dict[str, Any]]) -> pd.DataFrame:
                 "day_period": match.get("dayPeriodToken"),
                 "status_id": match.get("statusId"),
                 "status": status_label(match.get("statusId")),
+                "active_player_id": active_player_id,
+                "active_player": active_player,
                 "start_date_utc": match.get("startDate"),
                 "player1": player_name(match.get("player1"))
                 or f"{match.get('player1FirstName', '')} {match.get('player1LastName', '')}".strip(),

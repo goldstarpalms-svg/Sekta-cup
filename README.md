@@ -6,6 +6,7 @@ It includes:
 
 - official Setka upcoming-match feed integration
 - live Setka prediction board with confidence filters, pick-strength labels, mobile cards, and set-count Over/Under
+- Live Match Center with in-play Setka scores, set scores, active player, auto-refresh, and official viewing links
 - Owner Edge Engine with GREEN/WATCH/NO BET decisions, minimum value odds, and bankroll caps
 - official Setka results/live-score checker with auto-refresh option
 - automatic grading for saved/uploaded Setka prediction snapshots
@@ -46,6 +47,13 @@ It includes:
 - Paste multiple decimal odds for table-tennis selections
 - Calculate combined odds, implied probability, payout, and risk level
 - Simple split-stake planning and CSV export
+
+### Live Match Center
+
+- Fetches official Setka live widget matches
+- Shows current match score, set scores, active player, tournament, and location
+- Auto-refresh option for near-live tracking
+- Official Setka site/schedule links for watching where available
 
 ### Owner Edge Engine
 
