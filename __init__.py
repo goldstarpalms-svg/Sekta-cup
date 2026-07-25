@@ -1,0 +1,1 @@
+"""Setka prediction app package."""

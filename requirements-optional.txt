@@ -1,0 +1,8 @@
+# Optional ML / research tools.
+# Install only when you need tuning, explainability, or extra model families.
+
+scipy>=1.11
+lightgbm>=4.0
+catboost>=1.2
+optuna>=3.6
+shap>=0.45
