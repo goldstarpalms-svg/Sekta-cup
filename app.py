@@ -11,6 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from src.backtesting import run_holdout_backtest, threshold_table
+from src.github_storage import github_storage_enabled
 from src.persistence import (
     DAILY_RESULTS_FILE,
     STRONG_PICKS_FILE,
@@ -78,6 +79,21 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Optional permanent storage via GitHub. Add these in Streamlit secrets:
+# GITHUB_STORAGE_TOKEN, GITHUB_STORAGE_REPO, GITHUB_STORAGE_BRANCH, GITHUB_STORAGE_PREFIX
+try:
+    for key in [
+        "GITHUB_STORAGE_TOKEN",
+        "GITHUB_STORAGE_REPO",
+        "GITHUB_STORAGE_BRANCH",
+        "GITHUB_STORAGE_PREFIX",
+    ]:
+        value = st.secrets.get(key)
+        if value:
+            os.environ[key] = str(value)
+except Exception:
+    pass
 
 
 CUSTOM_CSS = """
@@ -1255,6 +1271,10 @@ elif page == "Owner Edge Engine":
 elif page == "Strong Pick Tracker":
     st.title("📌 Strong Pick Tracker")
     st.markdown("Automatically grades only GREEN/strong picks saved from the Trading Desk or Owner Edge Engine. It checks official Setka results for the saved pick dates — no weak picks mixed in.")
+    if github_storage_enabled():
+        st.success("Permanent GitHub storage is active. Strong picks/results will persist across redeploys until reset.")
+    else:
+        st.warning("GitHub permanent storage is not configured yet. Local storage may reset on Streamlit reboot/redeploy. Add GITHUB_STORAGE_TOKEN in Streamlit secrets for permanent saving.")
 
     tracker = load_strong_picks()
     session_tracker = st.session_state.get("strong_pick_tracker", pd.DataFrame())

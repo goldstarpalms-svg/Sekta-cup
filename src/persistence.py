@@ -5,6 +5,9 @@ from typing import Iterable
 
 import pandas as pd
 
+from src.github_storage import delete_file as github_delete_file
+from src.github_storage import github_storage_enabled, load_csv as github_load_csv, save_csv as github_save_csv
+
 APP_STATE_DIR = Path(__file__).resolve().parents[1] / "data" / "app_state"
 STRONG_PICKS_FILE = APP_STATE_DIR / "strong_picks.csv"
 DAILY_RESULTS_FILE = APP_STATE_DIR / "daily_results.csv"
@@ -17,6 +20,13 @@ def ensure_state_dir() -> Path:
 
 def load_table(path: str | Path) -> pd.DataFrame:
     path = Path(path)
+    if github_storage_enabled():
+        try:
+            remote = github_load_csv(path)
+            if not remote.empty:
+                return remote
+        except Exception:
+            pass
     if not path.exists() or path.stat().st_size == 0:
         return pd.DataFrame()
     try:
@@ -29,6 +39,11 @@ def save_table(frame: pd.DataFrame, path: str | Path) -> Path:
     ensure_state_dir()
     path = Path(path)
     frame.to_csv(path, index=False)
+    if github_storage_enabled():
+        try:
+            github_save_csv(frame, path, f"Update Setka app storage: {path.name}")
+        except Exception:
+            pass
     return path
 
 
@@ -55,6 +70,11 @@ def reset_table(path: str | Path) -> None:
     ensure_state_dir()
     if path.exists():
         path.unlink()
+    if github_storage_enabled():
+        try:
+            github_delete_file(path, f"Reset Setka app storage: {path.name}")
+        except Exception:
+            pass
 
 
 def load_strong_picks() -> pd.DataFrame:

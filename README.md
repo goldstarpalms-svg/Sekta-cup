@@ -64,6 +64,7 @@ It includes:
 
 - Saves GREEN picks from Setka Trading Desk or Owner Edge Engine into app storage
 - Keeps saved strong picks until the reset button is used
+- Supports optional permanent GitHub-backed storage so saved picks survive Streamlit redeploys
 - Auto-checks saved pick dates against official Setka results
 - Grades only the saved strong picks against official Setka results
 - Tracks won/lost/pending and strong-pick accuracy
