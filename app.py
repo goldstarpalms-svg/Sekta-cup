@@ -223,6 +223,69 @@ st.markdown("""
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
+
+    /* Fix sidebar toggle visibility */
+    [data-testid="collapsedControl"] {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        background: linear-gradient(135deg, #00F5FF 0%, #B537FF 100%) !important;
+        border-radius: 50% !important;
+        padding: 8px !important;
+        box-shadow: 0 0 20px rgba(0, 245, 255, 0.6) !important;
+        position: fixed !important;
+        top: 12px !important;
+        left: 12px !important;
+        z-index: 999999 !important;
+        width: 44px !important;
+        height: 44px !important;
+    }
+
+    [data-testid="collapsedControl"] svg {
+        color: #0A0E27 !important;
+        fill: #0A0E27 !important;
+        width: 24px !important;
+        height: 24px !important;
+    }
+
+    [data-testid="collapsedControl"]:hover {
+        transform: scale(1.1);
+        box-shadow: 0 0 30px rgba(0, 245, 255, 0.9) !important;
+    }
+
+    /* Ensure sidebar always has close button */
+    button[kind="header"] {
+        display: block !important;
+        visibility: visible !important;
+    }
+
+    /* Mobile-specific fixes */
+    @media (max-width: 768px) {
+        [data-testid="collapsedControl"] {
+            top: 10px !important;
+            left: 10px !important;
+            width: 48px !important;
+            height: 48px !important;
+        }
+
+        .main .block-container {
+            padding-top: 4rem !important;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+    }
+
+    /* Sidebar open state */
+    section[data-testid="stSidebar"] {
+        min-width: 250px !important;
+    }
+
+    /* Make sidebar close button visible */
+    section[data-testid="stSidebar"] button[kind="header"] {
+        color: #00F5FF !important;
+        background: rgba(0, 245, 255, 0.1) !important;
+        border-radius: 8px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
