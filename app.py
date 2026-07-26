@@ -354,5 +354,295 @@ if page == "🏠 Home":
                     st.rerun()
 
 
-# NOTE: Part 2B will add: Live, Analyze, Vault, and Edge pages below this line
-# For now, only HOME page works. Other pages will show blank until Part 2B.
+
+# ============================================
+# LIVE PAGE
+# ============================================
+elif page == "📡 Live":
+    st.markdown("# 📡 LIVE MATCHES")
+    st.caption("Real-time Setka Cup matches")
+    
+    live_matches, live_error = get_live_matches()
+    
+    if live_error:
+        st.warning(f"⚠️ {live_error}")
+    
+    if live_matches.empty:
+        st.info("😴 No live matches now. Check during match hours.")
+    else:
+        st.success(f"🔴 {len(live_matches)} matches LIVE")
+        bundle, _ = get_model_bundle()
+        
+        for _, match in live_matches.iterrows():
+            p1 = match.get("player1", "?")
+            p2 = match.get("player2", "?")
+            score = match.get("score", "")
+            
+            st.markdown(f"""
+            <div class="pick-card">
+                <div class="pick-title">🔴 LIVE: {p1} vs {p2}</div>
+                <div class="pick-time">Score: {score}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if bundle:
+                try:
+                    pred = predict_with_bundle(bundle, p1, p2)
+                    conf = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
+                    st.caption(f"🎯 Model: {pred['predicted_winner']} wins ({conf*100:.1f}%)")
+                except Exception:
+                    pass
+
+
+# ============================================
+# ANALYZE PAGE
+# ============================================
+elif page == "🧠 Analyze":
+    st.markdown("# 🧠 DEEP ANALYZE")
+    st.caption("Analyze any matchup")
+    
+    bundle, model_error = get_model_bundle()
+    
+    if model_error:
+        st.warning(f"⚠️ {model_error}")
+        st.stop()
+    
+    try:
+        raw_matches, _ = load_raw_data()
+        players = sorted(set(raw_matches["player1"].dropna().unique()) | set(raw_matches["player2"].dropna().unique()))
+    except Exception:
+        players = []
+    
+    if not players:
+        st.error("Could not load players")
+        st.stop()
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        player_a = st.selectbox("Player A", players, key="pa")
+    with col2:
+        player_b = st.selectbox("Player B", players, index=1 if len(players) > 1 else 0, key="pb")
+    
+    if player_a == player_b:
+        st.warning("Select two different players")
+        st.stop()
+    
+    if st.button("🔮 ANALYZE"):
+        try:
+            pred = predict_with_bundle(bundle, player_a, player_b)
+            conf = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
+            reason = generate_ai_reasoning(pred, player_a, player_b)
+            fair = fair_odds_from_probability(conf)
+            
+            st.markdown(f"""
+            <div class="pick-card pick-card-top">
+                <div class="pick-title">🏓 {player_a} vs {player_b}</div>
+                <div class="pick-prediction">🎯 {pred['predicted_winner']} WINS</div>
+                <div class="confidence-bar"><div class="confidence-fill" style="width: {conf*100}%"></div></div>
+                <div style="text-align: center; color: #00FF9C; font-weight: 700; margin-bottom: 1rem;">{conf*100:.1f}% confidence</div>
+                <div class="pick-stat"><span class="stat-label">Fair Odds</span><span class="stat-value">{fair:.2f}</span></div>
+                <div class="ai-analysis">🧠 <strong>Analysis:</strong> {reason}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            features = pred.get("features", {})
+            st.markdown("### 📊 Detailed Metrics")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.metric(f"{player_a} Elo", f"{features.get('a_elo', 0):.0f}")
+                st.metric(f"{player_a} Form", f"{features.get('a_weighted_recent_form', 0)*100:.0f}%")
+                st.metric(f"{player_a} Streak", f"{int(features.get('a_win_streak', 0))}")
+            with c2:
+                st.metric(f"{player_b} Elo", f"{features.get('b_elo', 0):.0f}")
+                st.metric(f"{player_b} Form", f"{features.get('b_weighted_recent_form', 0)*100:.0f}%")
+                st.metric(f"{player_b} Streak", f"{int(features.get('b_win_streak', 0))}")
+            
+            st.markdown("### 🔍 H2H History")
+            h2h_matches = features.get("h2h_matches", 0)
+            h2h_a_rate = features.get("h2h_a_win_rate", 0.5)
+            
+            if h2h_matches > 0:
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.metric("H2H Matches", f"{int(h2h_matches)}")
+                with c2:
+                    st.metric(f"{player_a} Wins", f"{h2h_a_rate*100:.0f}%")
+                with c3:
+                    st.metric(f"{player_b} Wins", f"{(1-h2h_a_rate)*100:.0f}%")
+            else:
+                st.info("No head-to-head history between these players")
+        except Exception as exc:
+            st.error(f"Analysis failed: {exc}")
+
+
+# ============================================
+# VAULT PAGE
+# ============================================
+elif page == "🛡️ Vault":
+    st.markdown("# 🛡️ BANKROLL VAULT")
+    st.caption("Track your paper trading performance")
+    
+    state = load_bankroll_state()
+    stats = calculate_stats(state)
+    
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Bankroll", format_currency(state["current_bankroll"]))
+        st.metric("Starting", format_currency(state["starting_bankroll"]))
+    with c2:
+        st.metric("Total Profit", format_currency(stats["total_profit"]))
+        st.metric("Total Staked", format_currency(stats["total_staked"]))
+    with c3:
+        st.metric("Win Rate", f"{stats['win_rate']:.1f}%")
+        st.metric("ROI", f"{stats['roi']:+.1f}%")
+    
+    st.markdown("---")
+    
+    # Streak info
+    streak = state.get("streak", {"current": 0, "type": "none"})
+    if streak.get("type") != "none":
+        emoji = "🔥" if streak["type"] == "win" else "❄️"
+        st.markdown(f"### {emoji} Current Streak: {streak['current']} {streak['type']}s")
+    
+    st.markdown("### 📋 Bet Journal")
+    
+    if not state["bets"]:
+        st.info("💡 No bets tracked yet. Go to Home page and tap 'Track This Bet' on picks.")
+    else:
+        pending = [b for b in state["bets"] if b["status"] == "pending"]
+        if pending:
+            st.markdown(f"#### ⏳ Pending Bets ({len(pending)})")
+            for bet in reversed(pending):
+                col1, col2, col3 = st.columns([3, 1, 1])
+                with col1:
+                    st.markdown(f"**{bet['match']}** → {bet['prediction']}")
+                    st.caption(f"Stake: {format_currency(bet['stake'])} @ {bet['odds']:.2f} | Confidence: {bet['confidence']*100:.1f}%")
+                with col2:
+                    if st.button("✅ Won", key=f"win_{bet['id']}"):
+                        settle_bet(state, bet["id"], True)
+                        st.success("Bet settled as WIN!")
+                        st.rerun()
+                with col3:
+                    if st.button("❌ Lost", key=f"lose_{bet['id']}"):
+                        settle_bet(state, bet["id"], False)
+                        st.error("Bet settled as LOSS")
+                        st.rerun()
+        
+        settled = [b for b in state["bets"] if b["status"] == "settled"]
+        if settled:
+            st.markdown(f"#### 📜 History ({len(settled)} settled)")
+            
+            # Recent history table
+            for bet in reversed(settled[-20:]):
+                emoji = "✅" if bet.get("won") else "❌"
+                pnl = bet.get("profit_loss", 0)
+                color = "#00FF9C" if pnl > 0 else "#FF3366"
+                date = bet["timestamp"][:10]
+                st.markdown(f"""
+                <div style="padding: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                    {emoji} <strong>{bet['match']}</strong> → {bet['prediction']}<br>
+                    <span style="color: #B537FF; font-size: 0.85rem;">{date} • Stake: {format_currency(bet.get('stake', 0))} @ {bet.get('odds', 0):.2f}</span> 
+                    <span style="color:{color}; float: right; font-weight: 900;">{format_currency(pnl)}</span>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # Reset option
+        st.markdown("---")
+        with st.expander("⚠️ Danger Zone"):
+            st.warning("This will reset ALL bets and bankroll to starting values.")
+            if st.button("🗑️ Reset All Data"):
+                if state.get("bets"):
+                    state["bets"] = []
+                    state["current_bankroll"] = state["starting_bankroll"]
+                    state["streak"] = {"current": 0, "type": "none", "best_win": 0, "worst_loss": 0}
+                    save_bankroll_state(state)
+                    st.success("✅ Reset complete!")
+                    st.rerun()
+
+
+# ============================================
+# EDGE PAGE
+# ============================================
+elif page == "📊 Edge":
+    st.markdown("# 📊 STATISTICAL EDGE")
+    st.caption("Model transparency and performance")
+    
+    bundle, model_error = get_model_bundle()
+    
+    if model_error:
+        st.warning(f"⚠️ {model_error}")
+        st.stop()
+    
+    st.markdown("### 🤖 Model Info")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Algorithm", bundle.get("algorithm", "unknown").upper())
+    with c2:
+        st.metric("Train Rows", f"{bundle.get('train_rows', 0):,}")
+    with c3:
+        st.metric("Test Rows", f"{bundle.get('test_rows', 0):,}")
+    
+    st.markdown("### 📈 Performance Metrics")
+    metrics = bundle.get("metrics", [])
+    if metrics:
+        df = pd.DataFrame(metrics)
+        st.dataframe(df, use_container_width=True)
+        
+        # Highlight winner accuracy
+        for m in metrics:
+            if m.get("model") == "winner" and m.get("accuracy"):
+                acc_pct = m["accuracy"] * 100
+                roc = m.get("roc_auc", 0)
+                
+                if acc_pct >= 65:
+                    st.success(f"🎯 Winner Accuracy: {acc_pct:.1f}% (ROC-AUC: {roc:.3f}) - EXCELLENT")
+                elif acc_pct >= 60:
+                    st.info(f"🎯 Winner Accuracy: {acc_pct:.1f}% (ROC-AUC: {roc:.3f}) - GOOD")
+                else:
+                    st.warning(f"🎯 Winner Accuracy: {acc_pct:.1f}% (ROC-AUC: {roc:.3f}) - NEEDS IMPROVEMENT")
+    else:
+        st.info("No metrics available. Retrain the model to see metrics.")
+    
+    st.markdown("### 🎯 Features Being Used")
+    features_list = bundle.get("feature_columns", [])
+    if features_list:
+        st.write(f"**Total features:** {len(features_list)}")
+        
+        # Categorize features
+        categories = {
+            "Elo Ratings": [f for f in features_list if "elo" in f.lower()],
+            "Win Rates": [f for f in features_list if "win_rate" in f.lower() or "recent_form" in f.lower()],
+            "Fatigue": [f for f in features_list if "hours" in f.lower() or "matches_today" in f.lower()],
+            "Streaks": [f for f in features_list if "streak" in f.lower()],
+            "H2H": [f for f in features_list if "h2h" in f.lower()],
+            "Points/Sets": [f for f in features_list if "points" in f.lower() or "set" in f.lower()],
+        }
+        
+        for cat, feats in categories.items():
+            if feats:
+                with st.expander(f"{cat} ({len(feats)})"):
+                    for f in feats:
+                        st.text(f"• {f}")
+    
+    st.markdown("### 💡 About the Oracle")
+    st.markdown("""
+    <div class="pick-card">
+        <strong>🔮 How OracleBet Works:</strong><br><br>
+        • Analyzes <strong>155,000+ historical matches</strong><br>
+        • Uses <strong>XGBoost machine learning</strong> algorithm<br>
+        • Tracks <strong>60+ features</strong> per match<br>
+        • Updates <strong>Elo ratings dynamically</strong><br>
+        • Detects <strong>fatigue, streaks, and momentum</strong><br>
+        • Considers <strong>head-to-head history</strong><br>
+        • Calculates <strong>Kelly Criterion</strong> for optimal stakes<br>
+        • Only shows picks with your <strong>minimum confidence</strong> threshold<br><br>
+        <em>Remember: No model is perfect. Always paper trade first, bet responsibly, and never chase losses.</em>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ============================================
+# FOOTER
+# ============================================
+st.markdown("---")
+st.caption("🔮 OracleBet v1.0 • Built with 155K+ matches • Paper trade first, bet second")
