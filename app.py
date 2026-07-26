@@ -29,6 +29,12 @@ try:
         format_currency,
         check_loss_limit,
     )
+    from src.predictions_tracker import (
+        load_predictions,
+        add_prediction,
+        update_prediction_result,
+        calculate_track_record,
+    )
     IMPORTS_OK = True
     IMPORT_ERROR = None
 except Exception as exc:
@@ -203,7 +209,7 @@ with st.sidebar:
     if 'current_page' not in st.session_state:
         st.session_state.current_page = "🏠 Home"
     
-    nav_options = ["🏠 Home", "🎯 All Picks", "📡 Live", "🧠 Analyze", "🛡️ Vault", "📊 Edge", "🗺️ Roadmap"]
+    nav_options = ["🏠 Home", "🎯 All Picks", "📡 Live", "🧠 Analyze", "📈 Track Record", "🛡️ Vault", "📊 Edge", "🗺️ Roadmap"]
     
     page = st.radio(
         "Navigation",
@@ -482,11 +488,21 @@ if page == "🏠 Home":
 
 
 # ============================================
-# LIVE PAGE
+# LIVE PAGE (UPGRADED)
 # ============================================
 elif page == "📡 Live":
     st.markdown("# 📡 LIVE MATCHES")
-    st.caption("Real-time Setka Cup matches")
+    st.caption("Real-time Setka Cup matches with live scores")
+    
+    # Auto-refresh option
+    refresh_col1, refresh_col2 = st.columns([3, 1])
+    with refresh_col2:
+        auto_refresh = st.checkbox("🔄 Auto-refresh (15s)", value=False)
+    
+    if auto_refresh:
+        st.markdown("""
+        <meta http-equiv="refresh" content="15">
+        """, unsafe_allow_html=True)
     
     live_matches, live_error = get_live_matches()
     
@@ -494,30 +510,112 @@ elif page == "📡 Live":
         st.warning(f"⚠️ {live_error}")
     
     if live_matches.empty:
-        st.info("😴 No live matches now. Check during match hours.")
+        st.info("😴 No live matches right now. Check during peak Setka Cup hours (usually 24/7 but varies).")
+        st.markdown("""
+        <div class="pick-card">
+            <div class="pick-title">💡 About Live Matches</div>
+            <div style="color: #E8ECFF;">
+                Live matches appear here when players are actively competing.<br>
+                We show:<br>
+                • Current score (sets and points)<br>
+                • Live probability updates<br>
+                • AI recommendations<br>
+                • Set-by-set breakdown
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
     else:
-        st.success(f"🔴 {len(live_matches)} matches LIVE")
+        st.success(f"🔴 {len(live_matches)} matches LIVE right now")
+        
         bundle, _ = get_model_bundle()
         
-        for _, match in live_matches.iterrows():
+        for idx, match in live_matches.iterrows():
             p1 = match.get("player1", "?")
             p2 = match.get("player2", "?")
-            score = match.get("score", "")
+            score = match.get("score", "0:0")
+            set_scores = match.get("set_scores", "")
+            location = match.get("location", "Setka Cup")
+            
+            # Parse current score
+            try:
+                p1_sets, p2_sets = score.split(":") if ":" in str(score) else ("0", "0")
+                p1_sets = int(p1_sets.strip())
+                p2_sets = int(p2_sets.strip())
+            except:
+                p1_sets, p2_sets = 0, 0
+            
+            # Determine leader
+            if p1_sets > p2_sets:
+                leader = p1
+                lead_color = "#00FF9C"
+            elif p2_sets > p1_sets:
+                leader = p2
+                lead_color = "#00FF9C"
+            else:
+                leader = "Tied"
+                lead_color = "#FFB800"
             
             st.markdown(f"""
-            <div class="pick-card">
-                <div class="pick-title">🔴 LIVE: {p1} vs {p2}</div>
-                <div class="pick-time">Score: {score}</div>
-            </div>
+            <div class="pick-card" style="border-left: 4px solid #FF3366;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <div class="pick-title">🔴 LIVE</div>
+                    <div style="color: #FF3366; font-weight: 900; font-size: 0.85rem;">● BROADCASTING</div>
+                </div>
+                <div style="font-size: 1.2rem; font-weight: 700; color: #E8ECFF; margin-bottom: 0.5rem;">
+                    {p1} vs {p2}
+                </div>
+                <div class="pick-time">📍 {location}</div>
+                
+                <div style="background: rgba(0, 245, 255, 0.1); padding: 1rem; border-radius: 12px; margin: 1rem 0; text-align: center;">
+                    <div style="color: #B537FF; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 2px; font-weight: 700;">Current Score</div>
+                    <div style="font-size: 2.5rem; font-weight: 900; color: #00F5FF; margin: 0.5rem 0;">
+                        {p1_sets} : {p2_sets}
+                    </div>
+                    <div style="color: {lead_color}; font-weight: 700;">
+                        {'🏆 ' + leader + ' leads' if leader != 'Tied' else '⚖️ Tied'}
+                    </div>
+                </div>
             """, unsafe_allow_html=True)
             
+            # Show set-by-set if available
+            if set_scores:
+                st.markdown(f"""
+                <div style="background: rgba(255, 255, 255, 0.05); padding: 0.8rem; border-radius: 10px; margin: 0.5rem 0;">
+                    <div style="color: #B537FF; font-size: 0.8rem; font-weight: 700; text-transform: uppercase;">Set-by-Set</div>
+                    <div style="color: #E8ECFF; font-family: monospace; font-size: 1rem; margin-top: 0.3rem;">{set_scores}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # AI Live Prediction
             if bundle:
                 try:
                     pred = predict_with_bundle(bundle, p1, p2)
                     conf = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
-                    st.caption(f"🎯 Model: {pred['predicted_winner']} wins ({conf*100:.1f}%)")
+                    predicted_winner = pred["predicted_winner"]
+                    
+                    # Adjust based on current score (basic)
+                    if p1_sets > p2_sets and predicted_winner == p1:
+                        confidence_note = "✅ Prediction on track"
+                    elif p2_sets > p1_sets and predicted_winner == p2:
+                        confidence_note = "✅ Prediction on track"
+                    elif p1_sets == p2_sets:
+                        confidence_note = "⏳ Match too early to tell"
+                    else:
+                        confidence_note = "⚠️ Underdog leading - upset possible"
+                    
+                    st.markdown(f"""
+                    <div style="background: rgba(181, 55, 255, 0.1); padding: 0.8rem; border-radius: 10px; margin: 0.5rem 0;">
+                        <div style="color: #B537FF; font-size: 0.8rem; font-weight: 700; text-transform: uppercase;">🧠 AI Prediction</div>
+                        <div style="color: #00FF9C; font-weight: 700; font-size: 1.1rem; margin: 0.3rem 0;">
+                            {predicted_winner} to win ({conf*100:.1f}%)
+                        </div>
+                        <div style="color: #E8ECFF; font-size: 0.9rem;">{confidence_note}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
                 except Exception:
                     pass
+            
+            st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ============================================
@@ -912,6 +1010,24 @@ elif page == "🎯 All Picks":
                     pred_data["sets_prob"] = max(sets_over, sets_under)
                     pred_data["expected_sets"] = rule_pred.get("expected_sets_played", 0)
                 
+                # Auto-log this prediction for tracking
+                add_prediction({
+                    "match_id": f"{p1}_vs_{p2}_{match.get('start_date_lagos', '')}_{match.get('start_time_lagos', '')}",
+                    "player1": p1,
+                    "player2": p2,
+                    "match_date": str(match.get("start_date_lagos", "")),
+                    "match_time": str(match.get("start_time_lagos", "")),
+                    "location": str(match.get("location", "")),
+                    "predicted_winner": predicted_winner,
+                    "confidence": winner_prob,
+                    "total_pick": pred_data.get("total_pick"),
+                    "total_prob": pred_data.get("total_prob"),
+                    "first_pick": pred_data.get("first_pick"),
+                    "first_prob": pred_data.get("first_prob"),
+                    "sets_pick": pred_data.get("sets_pick"),
+                    "sets_prob": pred_data.get("sets_prob"),
+                })
+
                 all_predictions.append(pred_data)
                 
             except Exception:
@@ -1075,6 +1191,156 @@ elif page == "🎯 All Picks":
                 })
                 st.success("✅ Tracked in Vault!")
                 st.rerun()
+
+
+# ============================================
+# TRACK RECORD PAGE
+# ============================================
+elif page == "📈 Track Record":
+    st.markdown("# 📈 AI TRACK RECORD")
+    st.caption("Every prediction, every result - complete transparency")
+    
+    record = calculate_track_record()
+    
+    # Overall metrics
+    st.markdown("### 📊 Overall Performance")
+    
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("Total Predictions", f"{record['total']:,}")
+    with m2:
+        st.metric("Settled", f"{record['settled']:,}", f"{record['pending']} pending")
+    with m3:
+        acc = record['winner_accuracy']
+        emoji = "🔥" if acc >= 65 else "⭐" if acc >= 60 else "⚠️"
+        st.metric("Winner Accuracy", f"{acc:.1f}%", emoji)
+    with m4:
+        high_acc = record['high_conf_accuracy']
+        st.metric("High Confidence", f"{high_acc:.1f}%", f"{record['high_conf_total']} bets")
+    
+    st.markdown("---")
+    
+    # Market breakdown
+    st.markdown("### 🎯 Accuracy by Market")
+    
+    markets_data = [
+        {"name": "🎯 Winner", "acc": record['winner_accuracy'], "total": record['settled']},
+        {"name": "📊 Total Points", "acc": record['total_accuracy'], "total": record.get('total_settled', 0)},
+        {"name": "⚡ First Set O/U", "acc": record['first_set_accuracy'], "total": record.get('first_settled', 0)},
+        {"name": "🎾 Sets O/U", "acc": record['sets_accuracy'], "total": record.get('sets_settled', 0)},
+    ]
+    
+    for m in markets_data:
+        if m['total'] > 0:
+            color = "#00FF9C" if m['acc'] >= 60 else "#FFB800" if m['acc'] >= 55 else "#FF3366"
+            st.markdown(f"""
+            <div class="pick-card">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div style="font-size: 1.1rem; font-weight: 700; color: #E8ECFF;">{m['name']}</div>
+                    <div style="font-size: 1.5rem; font-weight: 900; color: {color};">{m['acc']:.1f}%</div>
+                </div>
+                <div class="confidence-bar" style="margin-top: 0.5rem;">
+                    <div class="confidence-fill" style="width: {m['acc']}%; background: {color};"></div>
+                </div>
+                <div style="color: #B537FF; font-size: 0.85rem; margin-top: 0.3rem;">{m['total']} settled bets</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Recent predictions
+    st.markdown("### 📋 Recent Predictions")
+    
+    predictions = load_predictions()
+    
+    if not predictions:
+        st.info("No predictions logged yet. Visit the All Picks page to generate predictions.")
+    else:
+        # Filter options
+        filter_col1, filter_col2 = st.columns(2)
+        with filter_col1:
+            status_filter = st.selectbox("Status", ["All", "Pending", "Settled", "Correct", "Incorrect"])
+        with filter_col2:
+            limit_show = st.selectbox("Show", [10, 25, 50, 100], index=1)
+        
+        # Filter predictions
+        filtered = predictions
+        if status_filter == "Pending":
+            filtered = [p for p in filtered if p.get("status") == "pending"]
+        elif status_filter == "Settled":
+            filtered = [p for p in filtered if p.get("status") == "settled"]
+        elif status_filter == "Correct":
+            filtered = [p for p in filtered if p.get("winner_correct") == True]
+        elif status_filter == "Incorrect":
+            filtered = [p for p in filtered if p.get("winner_correct") == False]
+        
+        # Show most recent first
+        filtered = list(reversed(filtered))[:limit_show]
+        
+        st.caption(f"Showing {len(filtered)} of {len(predictions)} total predictions")
+        
+        for pred in filtered:
+            status = pred.get("status", "pending")
+            
+            if status == "pending":
+                status_emoji = "⏳"
+                status_color = "#FFB800"
+                result_text = "Awaiting result"
+            elif pred.get("winner_correct"):
+                status_emoji = "✅"
+                status_color = "#00FF9C"
+                result_text = f"Correct! Actual: {pred.get('actual_winner', '?')}"
+            else:
+                status_emoji = "❌"
+                status_color = "#FF3366"
+                result_text = f"Wrong. Actual: {pred.get('actual_winner', '?')}"
+            
+            conf = pred.get("confidence", 0) * 100
+            
+            st.markdown(f"""
+            <div class="pick-card" style="border-left: 4px solid {status_color};">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem;">
+                    <div style="font-weight: 700; color: #E8ECFF;">
+                        {pred.get('player1', '?')} vs {pred.get('player2', '?')}
+                    </div>
+                    <div style="font-size: 1.2rem;">{status_emoji}</div>
+                </div>
+                <div style="color: #B537FF; font-size: 0.85rem; margin-bottom: 0.5rem;">
+                    📅 {pred.get('match_date', '?')} • ⏰ {pred.get('match_time', '?')} • 📍 {pred.get('location', '?')}
+                </div>
+                <div style="background: rgba(0, 245, 255, 0.05); padding: 0.5rem; border-radius: 8px;">
+                    <div style="color: #00F5FF; font-weight: 700;">
+                        🎯 Predicted: {pred.get('predicted_winner', '?')} ({conf:.1f}%)
+                    </div>
+                    <div style="color: {status_color}; font-weight: 700; margin-top: 0.3rem;">
+                        {result_text}
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Info section
+    st.markdown("### 💡 How Track Record Works")
+    st.markdown("""
+    <div class="pick-card">
+        <div style="color: #E8ECFF;">
+            <strong>🤖 Automatic Tracking:</strong> Every prediction shown on the All Picks page
+            is automatically logged. As matches complete, results are compared against predictions.<br><br>
+            <strong>📊 What We Track:</strong><br>
+            • Winner predictions (most important)<br>
+            • Total points Over/Under 75.5<br>
+            • First set Over/Under 18.5<br>
+            • Sets Over/Under 3.5<br><br>
+            <strong>🎯 Accuracy Goals:</strong><br>
+            • 65%+ Winner accuracy → Excellent (green)<br>
+            • 60-65% Winner accuracy → Good (cyan)<br>
+            • Below 60% → Needs improvement (amber/red)<br><br>
+            <em>Higher sample sizes = more reliable accuracy numbers. Focus on the 50+ settled range.</em>
+        </div>
+    </div>
+    """)
 
 
 # ============================================
