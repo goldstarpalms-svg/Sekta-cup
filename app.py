@@ -50,111 +50,309 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    .stApp { background: linear-gradient(135deg, #0A0E27 0%, #1a1f4a 50%, #0A0E27 100%); color: #E8ECFF; }
-    .main .block-container { padding-top: 2rem; max-width: 1200px; }
-    h1 { color: #00F5FF !important; text-shadow: 0 0 20px rgba(0, 245, 255, 0.5); font-weight: 900; }
-    h2, h3, h4 { color: #E8ECFF !important; font-weight: 700; }
-    section[data-testid="stSidebar"] { background: linear-gradient(180deg, #0A0E27 0%, #151a3d 100%); border-right: 1px solid rgba(0, 245, 255, 0.2); }
-    section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 { color: #00F5FF !important; }
-    [data-testid="stMetric"] { background: rgba(0, 245, 255, 0.05); border: 1px solid rgba(0, 245, 255, 0.2); border-radius: 16px; padding: 1rem; box-shadow: 0 0 20px rgba(0, 245, 255, 0.1); }
-    [data-testid="stMetricValue"] { color: #00F5FF !important; font-size: 1.8rem !important; font-weight: 900; }
-    [data-testid="stMetricLabel"] { color: #B537FF !important; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; font-size: 0.85rem !important; }
-    .stButton button { background: linear-gradient(135deg, #00F5FF 0%, #B537FF 100%); color: #0A0E27; border: none; border-radius: 12px; font-weight: 900; letter-spacing: 1px; padding: 0.6rem 1.5rem; box-shadow: 0 0 15px rgba(0, 245, 255, 0.4); }
-    .stButton button:hover { transform: translateY(-2px); box-shadow: 0 0 25px rgba(0, 245, 255, 0.6); }
-    .stAlert { background: rgba(0, 245, 255, 0.08); border: 1px solid rgba(0, 245, 255, 0.3); border-radius: 12px; }
-    .pick-card { background: linear-gradient(135deg, rgba(0, 245, 255, 0.05) 0%, rgba(181, 55, 255, 0.05) 100%); border: 1px solid rgba(0, 245, 255, 0.3); border-radius: 20px; padding: 1.5rem; margin-bottom: 1rem; box-shadow: 0 0 30px rgba(0, 245, 255, 0.1); }
-    .pick-card-top { background: linear-gradient(135deg, rgba(0, 255, 156, 0.1) 0%, rgba(0, 245, 255, 0.1) 100%); border: 2px solid #00FF9C; box-shadow: 0 0 40px rgba(0, 255, 156, 0.3); }
-    .pick-title { font-size: 1.3rem; font-weight: 900; color: #00F5FF; margin-bottom: 0.5rem; }
-    .pick-time { color: #B537FF; font-size: 0.9rem; font-weight: 600; margin-bottom: 1rem; }
-    .pick-prediction { font-size: 1.8rem; font-weight: 900; color: #00FF9C; margin: 1rem 0; text-shadow: 0 0 15px rgba(0, 255, 156, 0.4); }
-    .confidence-bar { background: rgba(255, 255, 255, 0.1); border-radius: 10px; height: 20px; overflow: hidden; margin: 0.5rem 0; }
-    .confidence-fill { background: linear-gradient(90deg, #00F5FF 0%, #00FF9C 100%); height: 100%; border-radius: 10px; box-shadow: 0 0 10px rgba(0, 255, 156, 0.5); }
-    .pick-stat { display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid rgba(255, 255, 255, 0.05); color: #E8ECFF; }
-    .stat-label { color: #B537FF; font-weight: 600; }
-    .stat-value { color: #00F5FF; font-weight: 700; }
-    .ai-analysis { background: rgba(181, 55, 255, 0.1); border-left: 3px solid #B537FF; padding: 0.8rem 1rem; margin: 1rem 0; border-radius: 8px; font-style: italic; color: #E8ECFF; }
-    .forecast-card { background: linear-gradient(135deg, rgba(255, 184, 0, 0.1) 0%, rgba(255, 51, 102, 0.05) 100%); border: 1px solid rgba(255, 184, 0, 0.3); border-radius: 20px; padding: 1.5rem; text-align: center; margin-bottom: 1.5rem; }
-    .forecast-value { font-size: 2.5rem; font-weight: 900; color: #FFB800; text-shadow: 0 0 20px rgba(255, 184, 0, 0.4); }
-    .warning-card { background: rgba(255, 51, 102, 0.15); border: 2px solid #FF3366; border-radius: 16px; padding: 1rem; margin: 1rem 0; }
-    /* ===== ENHANCED HAMBURGER MENU BUTTON ===== */
+    /* Hide default streamlit padding at top */
+    .main .block-container {
+        padding-top: 1rem !important;
+        max-width: 1200px;
+    }
+    
+    /* Top nav container - clean and professional */
+    .nav-wrapper {
+        background: #0F1729;
+        border-bottom: 1px solid rgba(0, 255, 156, 0.2);
+        padding: 12px 0;
+        margin: -1rem -1rem 1.5rem -1rem;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    }
+    
+    /* Brand logo area */
+    .brand-area {
+        text-align: center;
+        margin-bottom: 12px;
+        padding: 0 1rem;
+    }
+    
+    .brand-logo {
+        font-size: 1.6rem;
+        font-weight: 900;
+        background: linear-gradient(135deg, #00FF9C 0%, #00F5FF 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        letter-spacing: -0.5px;
+    }
+    
+    .brand-tagline {
+        color: #6B7280;
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin-top: -2px;
+    }
+    
+    /* Nav buttons override */
+    div[data-testid="column"] .stButton button {
+        background: transparent !important;
+        border: 1px solid rgba(107, 114, 128, 0.3) !important;
+        color: #9CA3AF !important;
+        font-size: 0.75rem !important;
+        font-weight: 600 !important;
+        padding: 0.6rem 0.2rem !important;
+        border-radius: 10px !important;
+        transition: all 0.15s ease !important;
+        min-height: 55px !important;
+        width: 100% !important;
+        letter-spacing: 0.3px !important;
+    }
+    
+    div[data-testid="column"] .stButton button:hover {
+        background: rgba(0, 255, 156, 0.08) !important;
+        border-color: rgba(0, 255, 156, 0.4) !important;
+        color: #00FF9C !important;
+        transform: translateY(-1px) !important;
+    }
+    
+    /* Active button indicator */
+    .active-nav-btn button {
+        background: linear-gradient(135deg, rgba(0, 255, 156, 0.15) 0%, rgba(0, 245, 255, 0.1) 100%) !important;
+        border-color: #00FF9C !important;
+        color: #00FF9C !important;
+        box-shadow: 0 0 15px rgba(0, 255, 156, 0.2) !important;
+        font-weight: 800 !important;
+    }
+    
+    /* Content area */
+    .stApp {
+        background: #0A0E1F !important;
+    }
+    
+    /* Better metric styling */
+    [data-testid="stMetric"] {
+        background: linear-gradient(135deg, #131b30 0%, #0F1729 100%) !important;
+        border: 1px solid rgba(0, 255, 156, 0.15) !important;
+        border-radius: 12px !important;
+        padding: 1.2rem !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    [data-testid="stMetricValue"] {
+        color: #00FF9C !important;
+        font-size: 1.6rem !important;
+        font-weight: 800 !important;
+    }
+    
+    [data-testid="stMetricLabel"] {
+        color: #6B7280 !important;
+        font-weight: 600 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 1.5px !important;
+        font-size: 0.75rem !important;
+    }
+    
+    [data-testid="stMetricDelta"] {
+        color: #00F5FF !important;
+    }
+    
+    /* Pick cards - clean saferstake style */
+    .pick-card {
+        background: linear-gradient(135deg, #131b30 0%, #0F1729 100%) !important;
+        border: 1px solid rgba(255, 255, 255, 0.05) !important;
+        border-radius: 14px !important;
+        padding: 1.3rem !important;
+        margin-bottom: 1rem !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
+        transition: all 0.2s ease !important;
+    }
+    
+    .pick-card:hover {
+        border-color: rgba(0, 255, 156, 0.3) !important;
+        box-shadow: 0 8px 30px rgba(0, 255, 156, 0.15) !important;
+    }
+    
+    .pick-card-top {
+        border: 1px solid #00FF9C !important;
+        box-shadow: 0 4px 30px rgba(0, 255, 156, 0.2) !important;
+    }
+    
+    /* Page title styling */
+    h1 {
+        color: #FFFFFF !important;
+        font-size: 1.8rem !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.5px !important;
+        text-shadow: none !important;
+    }
+    
+    h2 {
+        color: #FFFFFF !important;
+        font-size: 1.3rem !important;
+        font-weight: 700 !important;
+    }
+    
+    h3 {
+        color: #E5E7EB !important;
+        font-size: 1.1rem !important;
+        font-weight: 700 !important;
+    }
+    
+    /* Text colors */
+    p, .stMarkdown {
+        color: #D1D5DB !important;
+    }
+    
+    .stCaption {
+        color: #6B7280 !important;
+    }
+    
+    /* Primary CTA button style */
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #00FF9C 0%, #00F5FF 100%) !important;
+        color: #0A0E1F !important;
+        border: none !important;
+        font-weight: 800 !important;
+        padding: 0.8rem 2rem !important;
+        border-radius: 10px !important;
+        box-shadow: 0 4px 20px rgba(0, 255, 156, 0.3) !important;
+    }
+    
+    /* Alerts */
+    .stAlert {
+        background: rgba(0, 255, 156, 0.05) !important;
+        border: 1px solid rgba(0, 255, 156, 0.2) !important;
+        border-radius: 10px !important;
+    }
+    
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background: #0F1729 !important;
+        border-right: 1px solid rgba(0, 255, 156, 0.15) !important;
+    }
+    
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+        color: #00FF9C !important;
+    }
+    
+    /* Sidebar toggle */
     [data-testid="stSidebarCollapsedControl"],
     [data-testid="collapsedControl"] {
-        display: flex !important;
-        visibility: visible !important;
-        opacity: 1 !important;
-        background: linear-gradient(135deg, #00F5FF 0%, #B537FF 100%) !important;
-        border-radius: 14px !important;
-        padding: 12px !important;
-        box-shadow: 0 0 30px rgba(0, 245, 255, 0.7), 0 0 60px rgba(181, 55, 255, 0.4) !important;
+        background: rgba(0, 255, 156, 0.2) !important;
+        border-radius: 8px !important;
         position: fixed !important;
-        top: 18px !important;
-        left: 18px !important;
+        top: 12px !important;
+        left: 12px !important;
         z-index: 9999999 !important;
-        width: 56px !important;
-        height: 56px !important;
-        align-items: center !important;
-        justify-content: center !important;
-        cursor: pointer !important;
-        transition: all 0.3s ease !important;
-        border: 2px solid rgba(255, 255, 255, 0.2) !important;
     }
     
     [data-testid="stSidebarCollapsedControl"] svg,
     [data-testid="collapsedControl"] svg {
-        color: #0A0E27 !important;
-        fill: #0A0E27 !important;
-        width: 30px !important;
-        height: 30px !important;
-        stroke: #0A0E27 !important;
-        stroke-width: 3 !important;
+        color: #00FF9C !important;
+        fill: #00FF9C !important;
     }
     
-    [data-testid="stSidebarCollapsedControl"]:hover,
-    [data-testid="collapsedControl"]:hover {
-        transform: scale(1.1) !important;
-        box-shadow: 0 0 40px rgba(0, 245, 255, 1), 0 0 80px rgba(181, 55, 255, 0.7) !important;
+    /* Confidence bar */
+    .confidence-bar {
+        background: rgba(255, 255, 255, 0.05) !important;
+        border-radius: 10px;
+        height: 20px;
+        overflow: hidden;
+        margin: 0.5rem 0;
     }
     
-    @keyframes hamburger-pulse {
-        0%, 100% { 
-            box-shadow: 0 0 30px rgba(0, 245, 255, 0.7), 0 0 60px rgba(181, 55, 255, 0.4);
-        }
-        50% { 
-            box-shadow: 0 0 40px rgba(0, 245, 255, 1), 0 0 80px rgba(181, 55, 255, 0.7);
-        }
+    .confidence-fill {
+        background: linear-gradient(90deg, #00F5FF 0%, #00FF9C 100%);
+        height: 100%;
+        border-radius: 10px;
+        box-shadow: 0 0 10px rgba(0, 255, 156, 0.5);
     }
     
-    [data-testid="stSidebarCollapsedControl"],
-    [data-testid="collapsedControl"] {
-        animation: hamburger-pulse 2.5s infinite !important;
+    .pick-stat {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        color: #D1D5DB;
     }
     
-    /* Push main content down to avoid overlap */
-    .main .block-container {
-        padding-top: 5rem !important;
+    .stat-label {
+        color: #6B7280;
+        font-weight: 600;
+    }
+    
+    .stat-value {
+        color: #00F5FF;
+        font-weight: 700;
+    }
+    
+    .ai-analysis {
+        background: rgba(0, 255, 156, 0.05);
+        border-left: 3px solid #00FF9C;
+        padding: 0.8rem 1rem;
+        margin: 1rem 0;
+        border-radius: 8px;
+        font-style: italic;
+        color: #E8ECFF;
+    }
+    
+    .forecast-card {
+        background: linear-gradient(135deg, rgba(255, 184, 0, 0.05) 0%, rgba(255, 51, 102, 0.05) 100%);
+        border: 1px solid rgba(255, 184, 0, 0.3);
+        border-radius: 20px;
+        padding: 1.5rem;
+        text-align: center;
+        margin-bottom: 1.5rem;
+    }
+    
+    .forecast-value {
+        font-size: 2.5rem;
+        font-weight: 900;
+        color: #FFB800;
+        text-shadow: 0 0 20px rgba(255, 184, 0, 0.4);
+    }
+    
+    .warning-card {
+        background: rgba(255, 51, 102, 0.15);
+        border: 2px solid #FF3366;
+        border-radius: 16px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    
+    .pick-title {
+        font-size: 1.3rem;
+        font-weight: 900;
+        color: #00F5FF;
+        margin-bottom: 0.5rem;
+    }
+    
+    .pick-time {
+        color: #6B7280;
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin-bottom: 1rem;
+    }
+    
+    .pick-prediction {
+        font-size: 1.8rem;
+        font-weight: 900;
+        color: #00FF9C;
+        margin: 1rem 0;
+        text-shadow: 0 0 15px rgba(0, 255, 156, 0.4);
     }
     
     /* Roadmap-specific styles */
     .roadmap-phase {
-        background: linear-gradient(135deg, rgba(0, 245, 255, 0.05) 0%, rgba(181, 55, 255, 0.05) 100%);
-        border: 1px solid rgba(0, 245, 255, 0.3);
+        background: linear-gradient(135deg, rgba(0, 255, 156, 0.02) 0%, rgba(0, 245, 255, 0.02) 100%);
+        border: 1px solid rgba(0, 255, 156, 0.2);
         border-radius: 16px;
         padding: 1.2rem;
         margin-bottom: 1rem;
     }
     
-    .roadmap-done {
-        border-left: 4px solid #00FF9C;
-    }
-    
-    .roadmap-progress {
-        border-left: 4px solid #FFB800;
-    }
-    
-    .roadmap-future {
-        border-left: 4px solid #B537FF;
-        opacity: 0.7;
-    }
+    .roadmap-done { border-left: 4px solid #00FF9C; }
+    .roadmap-progress { border-left: 4px solid #FFB800; }
+    .roadmap-future { border-left: 4px solid #6B7280; opacity: 0.7; }
     
     .roadmap-title {
         font-size: 1.1rem;
@@ -174,60 +372,43 @@ st.markdown("""
         margin-bottom: 0.5rem;
     }
     
-    .status-done {
-        background: rgba(0, 255, 156, 0.2);
-        color: #00FF9C;
+    .status-done { background: rgba(0, 255, 156, 0.2); color: #00FF9C; }
+    .status-progress { background: rgba(255, 184, 0, 0.2); color: #FFB800; }
+    .status-future { background: rgba(107, 114, 128, 0.2); color: #9CA3AF; }
+    
+    .roadmap-features { margin-top: 0.5rem; color: #D1D5DB; }
+    .roadmap-features li { margin: 0.3rem 0; }
+    
+    .stButton button {
+        background: linear-gradient(135deg, #00F5FF 0%, #B537FF 100%) !important;
+        color: #0A0E27;
+        border: none;
+        border-radius: 12px;
+        font-weight: 900;
+        letter-spacing: 1px;
+        padding: 0.6rem 1.5rem;
+        box-shadow: 0 0 15px rgba(0, 245, 255, 0.4);
     }
     
-    .status-progress {
-        background: rgba(255, 184, 0, 0.2);
-        color: #FFB800;
+    .stButton button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0 25px rgba(0, 245, 255, 0.6);
     }
     
-    .status-future {
-        background: rgba(181, 55, 255, 0.2);
-        color: #B537FF;
-    }
-    
-    .roadmap-features {
-        margin-top: 0.5rem;
-        color: #E8ECFF;
-    }
-    
-    .roadmap-features li {
-        margin: 0.3rem 0;
-    }
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
 
 with st.sidebar:
-    st.markdown("# 🔮 ORACLEBET")
+    st.markdown("## 🔮 ORACLEBET")
     st.caption("The Future of Predictions")
     st.divider()
-    if 'current_page' not in st.session_state:
-        st.session_state.current_page = "🏠 Home"
     
-    nav_options = ["🏠 Home", "🎯 All Picks", "📡 Live", "🧠 Analyze", "📈 Track Record", "🛡️ Vault", "📊 Edge", "🗺️ Roadmap"]
-    
-    try:
-        current_index = nav_options.index(st.session_state.current_page)
-    except ValueError:
-        current_index = 0
-    
-    sidebar_page = st.radio(
-        "Navigation",
-        nav_options,
-        index=current_index,
-        label_visibility="collapsed",
-        key="sidebar_nav_selector",
-    )
-    
-    # Sync sidebar selection to session state
-    if sidebar_page != st.session_state.current_page:
-        st.session_state.current_page = sidebar_page
-        st.rerun()
+    st.markdown(f"**Current Page:**")
+    st.markdown(f"### {st.session_state.current_page}")
     st.divider()
     if IMPORTS_OK:
         state = load_bankroll_state()
@@ -254,110 +435,66 @@ if not IMPORTS_OK:
     st.stop()
 
 
-# ===== BRIGHT TOP NAVIGATION BAR =====
+# ===== TOP NAVIGATION - FIXED =====
 if 'current_page' not in st.session_state:
     st.session_state.current_page = "🏠 Home"
 
-# Custom CSS for top nav buttons - BRIGHT and VISIBLE
+def switch_page(page_name):
+    st.session_state.current_page = page_name
+
+# Brand header
 st.markdown("""
-<style>
-    /* Top nav container */
-    .top-nav-container {
-        background: linear-gradient(90deg, #FF3366 0%, #B537FF 25%, #00F5FF 50%, #00FF9C 75%, #FFB800 100%);
-        padding: 3px;
-        border-radius: 20px;
-        margin: 0 0 1.5rem 0;
-        box-shadow: 0 0 30px rgba(0, 245, 255, 0.5);
-    }
-    
-    .top-nav-inner {
-        background: #0A0E27;
-        border-radius: 17px;
-        padding: 12px 8px;
-    }
-    
-    /* Force buttons in nav to be highly visible */
-    div[data-testid="column"] .stButton button {
-        background: linear-gradient(135deg, #1a1f4a 0%, #0A0E27 100%) !important;
-        border: 2px solid rgba(0, 245, 255, 0.5) !important;
-        color: #E8ECFF !important;
-        font-size: 1.2rem !important;
-        padding: 0.8rem 0.3rem !important;
-        border-radius: 12px !important;
-        transition: all 0.2s ease !important;
-        min-height: 60px !important;
-        width: 100% !important;
-    }
-    
-    div[data-testid="column"] .stButton button:hover {
-        background: linear-gradient(135deg, #00F5FF 0%, #B537FF 100%) !important;
-        border-color: #00FF9C !important;
-        box-shadow: 0 0 20px rgba(0, 245, 255, 0.8) !important;
-        transform: translateY(-3px) !important;
-        color: #0A0E27 !important;
-    }
-    
-    /* Active button style */
-    .nav-active button {
-        background: linear-gradient(135deg, #00FF9C 0%, #00F5FF 100%) !important;
-        border-color: #FFB800 !important;
-        color: #0A0E27 !important;
-        box-shadow: 0 0 25px rgba(0, 255, 156, 0.6) !important;
-    }
-    
-    /* Page indicator */
-    .page-indicator {
-        text-align: center;
-        color: #00F5FF;
-        font-size: 0.85rem;
-        font-weight: 700;
-        margin-bottom: 1rem;
-        text-transform: uppercase;
-        letter-spacing: 3px;
-        padding: 0.5rem;
-        background: rgba(0, 245, 255, 0.05);
-        border-radius: 8px;
-        border: 1px solid rgba(0, 245, 255, 0.2);
-    }
-</style>
+<div class="nav-wrapper">
+    <div class="brand-area">
+        <div class="brand-logo">🔮 ORACLEBET</div>
+        <div class="brand-tagline">The Future of Predictions</div>
+    </div>
+</div>
 """, unsafe_allow_html=True)
 
-# Current page indicator (helps user know where they are)
-st.markdown(f'<div class="page-indicator">📍 Current: {st.session_state.current_page}</div>', unsafe_allow_html=True)
-
-# BRIGHT TOP NAVIGATION - Uses native Streamlit buttons (guaranteed to work)
-nav_cols = st.columns(8)
-
-nav_items = [
-    ("🏠", "Home", "🏠 Home", nav_cols[0]),
-    ("🎯", "Picks", "🎯 All Picks", nav_cols[1]),
-    ("📡", "Live", "📡 Live", nav_cols[2]),
-    ("🧠", "Analyze", "🧠 Analyze", nav_cols[3]),
-    ("📈", "Record", "📈 Track Record", nav_cols[4]),
-    ("🛡️", "Vault", "🛡️ Vault", nav_cols[5]),
-    ("📊", "Edge", "📊 Edge", nav_cols[6]),
-    ("🗺️", "Map", "🗺️ Roadmap", nav_cols[7]),
+# Navigation buttons - USING CALLBACKS (this fixes the click issue)
+nav_pages = [
+    ("🏠", "Home", "🏠 Home"),
+    ("🎯", "Picks", "🎯 All Picks"),
+    ("📡", "Live", "📡 Live"),
+    ("🧠", "Analyze", "🧠 Analyze"),
+    ("📈", "Record", "📈 Track Record"),
+    ("🛡️", "Vault", "🛡️ Vault"),
+    ("📊", "Edge", "📊 Edge"),
+    ("🗺️", "Map", "🗺️ Roadmap"),
 ]
 
-for icon, label, page_name, col in nav_items:
-    with col:
-        is_current = st.session_state.current_page == page_name
-        button_key = f"topnav_{label.lower()}"
+# Split into 2 rows of 4 for better mobile layout
+row1_cols = st.columns(4)
+row2_cols = st.columns(4)
+
+for i, (icon, label, page_name) in enumerate(nav_pages[:4]):
+    with row1_cols[i]:
+        is_active = st.session_state.current_page == page_name
+        if is_active:
+            st.markdown('<div class="active-nav-btn">', unsafe_allow_html=True)
         
-        # Wrap active button in special class
-        if is_current:
-            st.markdown('<div class="nav-active">', unsafe_allow_html=True)
+        button_label = f"{icon}\n{label}"
+        st.button(button_label, key=f"nav_{label}", use_container_width=True, on_click=switch_page, args=(page_name,))
         
-        if st.button(f"{icon}\n{label}", key=button_key, use_container_width=True):
-            st.session_state.current_page = page_name
-            st.rerun()
+        if is_active:
+            st.markdown('</div>', unsafe_allow_html=True)
+
+for i, (icon, label, page_name) in enumerate(nav_pages[4:]):
+    with row2_cols[i]:
+        is_active = st.session_state.current_page == page_name
+        if is_active:
+            st.markdown('<div class="active-nav-btn">', unsafe_allow_html=True)
         
-        if is_current:
+        button_label = f"{icon}\n{label}"
+        st.button(button_label, key=f"nav_{label}_{i}", use_container_width=True, on_click=switch_page, args=(page_name,))
+        
+        if is_active:
             st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("---")
 
-# Set page variable from session state
+# Set page variable from session state (THIS is what the rest of the app uses)
 page = st.session_state.current_page
 
 
