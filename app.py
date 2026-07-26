@@ -70,109 +70,130 @@ st.markdown("""
     .forecast-card { background: linear-gradient(135deg, rgba(255, 184, 0, 0.1) 0%, rgba(255, 51, 102, 0.05) 100%); border: 1px solid rgba(255, 184, 0, 0.3); border-radius: 20px; padding: 1.5rem; text-align: center; margin-bottom: 1.5rem; }
     .forecast-value { font-size: 2.5rem; font-weight: 900; color: #FFB800; text-shadow: 0 0 20px rgba(255, 184, 0, 0.4); }
     .warning-card { background: rgba(255, 51, 102, 0.15); border: 2px solid #FF3366; border-radius: 16px; padding: 1rem; margin: 1rem 0; }
-    /* ===== FORCE SIDEBAR TOGGLE ALWAYS VISIBLE ===== */
+    /* ===== ENHANCED HAMBURGER MENU BUTTON ===== */
     [data-testid="stSidebarCollapsedControl"],
     [data-testid="collapsedControl"] {
         display: flex !important;
         visibility: visible !important;
         opacity: 1 !important;
         background: linear-gradient(135deg, #00F5FF 0%, #B537FF 100%) !important;
-        border-radius: 50% !important;
-        padding: 10px !important;
-        box-shadow: 0 0 25px rgba(0, 245, 255, 0.8), 0 0 50px rgba(181, 55, 255, 0.4) !important;
+        border-radius: 14px !important;
+        padding: 12px !important;
+        box-shadow: 0 0 30px rgba(0, 245, 255, 0.7), 0 0 60px rgba(181, 55, 255, 0.4) !important;
         position: fixed !important;
-        top: 15px !important;
-        left: 15px !important;
+        top: 18px !important;
+        left: 18px !important;
         z-index: 9999999 !important;
-        width: 50px !important;
-        height: 50px !important;
+        width: 56px !important;
+        height: 56px !important;
         align-items: center !important;
         justify-content: center !important;
         cursor: pointer !important;
-        transition: transform 0.2s ease !important;
+        transition: all 0.3s ease !important;
+        border: 2px solid rgba(255, 255, 255, 0.2) !important;
     }
     
     [data-testid="stSidebarCollapsedControl"] svg,
-    [data-testid="collapsedControl"] svg,
-    [data-testid="stSidebarCollapsedControl"] button svg,
-    [data-testid="collapsedControl"] button svg {
+    [data-testid="collapsedControl"] svg {
         color: #0A0E27 !important;
         fill: #0A0E27 !important;
-        width: 28px !important;
-        height: 28px !important;
+        width: 30px !important;
+        height: 30px !important;
         stroke: #0A0E27 !important;
-        stroke-width: 2.5 !important;
+        stroke-width: 3 !important;
     }
     
     [data-testid="stSidebarCollapsedControl"]:hover,
     [data-testid="collapsedControl"]:hover {
-        transform: scale(1.15) rotate(90deg) !important;
-        box-shadow: 0 0 35px rgba(0, 245, 255, 1), 0 0 70px rgba(181, 55, 255, 0.6) !important;
+        transform: scale(1.1) !important;
+        box-shadow: 0 0 40px rgba(0, 245, 255, 1), 0 0 80px rgba(181, 55, 255, 0.7) !important;
     }
     
-    /* Add pulse animation to draw attention */
-    @keyframes pulse-glow {
-        0%, 100% { box-shadow: 0 0 25px rgba(0, 245, 255, 0.8), 0 0 50px rgba(181, 55, 255, 0.4); }
-        50% { box-shadow: 0 0 35px rgba(0, 245, 255, 1), 0 0 70px rgba(181, 55, 255, 0.7); }
+    @keyframes hamburger-pulse {
+        0%, 100% { 
+            box-shadow: 0 0 30px rgba(0, 245, 255, 0.7), 0 0 60px rgba(181, 55, 255, 0.4);
+        }
+        50% { 
+            box-shadow: 0 0 40px rgba(0, 245, 255, 1), 0 0 80px rgba(181, 55, 255, 0.7);
+        }
     }
     
     [data-testid="stSidebarCollapsedControl"],
     [data-testid="collapsedControl"] {
-        animation: pulse-glow 2s infinite !important;
+        animation: hamburger-pulse 2.5s infinite !important;
     }
     
-    /* Mobile responsiveness */
-    @media (max-width: 768px) {
-        [data-testid="stSidebarCollapsedControl"],
-        [data-testid="collapsedControl"] {
-            top: 20px !important;
-            left: 20px !important;
-            width: 55px !important;
-            height: 55px !important;
-        }
-        
-        .main .block-container {
-            padding-top: 5rem !important;
-            padding-left: 1rem !important;
-            padding-right: 1rem !important;
-        }
+    /* Push main content down to avoid overlap */
+    .main .block-container {
+        padding-top: 5rem !important;
+    }
+    
+    /* Roadmap-specific styles */
+    .roadmap-phase {
+        background: linear-gradient(135deg, rgba(0, 245, 255, 0.05) 0%, rgba(181, 55, 255, 0.05) 100%);
+        border: 1px solid rgba(0, 245, 255, 0.3);
+        border-radius: 16px;
+        padding: 1.2rem;
+        margin-bottom: 1rem;
+    }
+    
+    .roadmap-done {
+        border-left: 4px solid #00FF9C;
+    }
+    
+    .roadmap-progress {
+        border-left: 4px solid #FFB800;
+    }
+    
+    .roadmap-future {
+        border-left: 4px solid #B537FF;
+        opacity: 0.7;
+    }
+    
+    .roadmap-title {
+        font-size: 1.1rem;
+        font-weight: 900;
+        color: #00F5FF;
+        margin-bottom: 0.3rem;
+    }
+    
+    .roadmap-status {
+        display: inline-block;
+        padding: 0.2rem 0.6rem;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 0.5rem;
+    }
+    
+    .status-done {
+        background: rgba(0, 255, 156, 0.2);
+        color: #00FF9C;
+    }
+    
+    .status-progress {
+        background: rgba(255, 184, 0, 0.2);
+        color: #FFB800;
+    }
+    
+    .status-future {
+        background: rgba(181, 55, 255, 0.2);
+        color: #B537FF;
+    }
+    
+    .roadmap-features {
+        margin-top: 0.5rem;
+        color: #E8ECFF;
+    }
+    
+    .roadmap-features li {
+        margin: 0.3rem 0;
     }
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
-
-
-# ===== FALLBACK MOBILE NAVIGATION =====
-# In case sidebar toggle is hidden, provide top-of-page nav
-if IMPORTS_OK:
-    # Get current page from session state or default
-    if 'current_page' not in st.session_state:
-        st.session_state.current_page = "🏠 Home"
-    
-    # Create a horizontal navigation bar at top
-    nav_cols = st.columns(5)
-    with nav_cols[0]:
-        if st.button("🏠", key="nav_home", help="Home", use_container_width=True):
-            st.session_state.current_page = "🏠 Home"
-            st.rerun()
-    with nav_cols[1]:
-        if st.button("📡", key="nav_live", help="Live", use_container_width=True):
-            st.session_state.current_page = "📡 Live"
-            st.rerun()
-    with nav_cols[2]:
-        if st.button("🧠", key="nav_analyze", help="Analyze", use_container_width=True):
-            st.session_state.current_page = "🧠 Analyze"
-            st.rerun()
-    with nav_cols[3]:
-        if st.button("🛡️", key="nav_vault", help="Vault", use_container_width=True):
-            st.session_state.current_page = "🛡️ Vault"
-            st.rerun()
-    with nav_cols[4]:
-        if st.button("📊", key="nav_edge", help="Edge", use_container_width=True):
-            st.session_state.current_page = "📊 Edge"
-            st.rerun()
-    
-    st.markdown("---")
 
 
 with st.sidebar:
@@ -182,10 +203,12 @@ with st.sidebar:
     if 'current_page' not in st.session_state:
         st.session_state.current_page = "🏠 Home"
     
+    nav_options = ["🏠 Home", "📡 Live", "🧠 Analyze", "🛡️ Vault", "📊 Edge", "🗺️ Roadmap"]
+    
     page = st.radio(
         "Navigation",
-        ["🏠 Home", "📡 Live", "🧠 Analyze", "🛡️ Vault", "📊 Edge"],
-        index=["🏠 Home", "📡 Live", "🧠 Analyze", "🛡️ Vault", "📊 Edge"].index(st.session_state.current_page),
+        nav_options,
+        index=nav_options.index(st.session_state.current_page) if st.session_state.current_page in nav_options else 0,
         label_visibility="collapsed",
         key="sidebar_nav",
     )
@@ -740,6 +763,242 @@ elif page == "📊 Edge":
         • Calculates <strong>Kelly Criterion</strong> for optimal stakes<br>
         • Only shows picks with your <strong>minimum confidence</strong> threshold<br><br>
         <em>Remember: No model is perfect. Always paper trade first, bet responsibly, and never chase losses.</em>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ============================================
+# ROADMAP PAGE
+# ============================================
+elif page == "🗺️ Roadmap":
+    st.markdown("# 🗺️ ORACLEBET ROADMAP")
+    st.caption("Our journey to becoming the #1 table tennis prediction app")
+    
+    # Progress overview
+    st.markdown("### 📊 Overall Progress")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("✅ Completed", "8", "Features")
+    with col2:
+        st.metric("🚧 In Progress", "3", "Active")
+    with col3:
+        st.metric("🔮 Planned", "12", "Upcoming")
+    
+    st.markdown("---")
+    
+    # PHASE 1: COMPLETED
+    st.markdown("## ✅ PHASE 1: FOUNDATION")
+    st.caption("What we've already built (Week 1)")
+    
+    st.markdown("""
+    <div class="roadmap-phase roadmap-done">
+        <div class="roadmap-status status-done">✅ COMPLETE</div>
+        <div class="roadmap-title">🏗️ Core Infrastructure</div>
+        <div class="roadmap-features">
+            <ul>
+                <li>✨ Neon futuristic design system</li>
+                <li>🎨 Custom CSS with glow effects</li>
+                <li>📱 Mobile-first responsive layout</li>
+                <li>🔐 Persistent data storage</li>
+                <li>⚙️ User-configurable settings</li>
+            </ul>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="roadmap-phase roadmap-done">
+        <div class="roadmap-status status-done">✅ COMPLETE</div>
+        <div class="roadmap-title">🤖 ML Prediction Engine</div>
+        <div class="roadmap-features">
+            <ul>
+                <li>📊 XGBoost model trained on 155K+ matches</li>
+                <li>🎯 60+ features including fatigue & momentum</li>
+                <li>⚡ Dynamic Elo ratings with margin adjustments</li>
+                <li>🧠 AI reasoning for each pick</li>
+                <li>📈 Model transparency & metrics</li>
+            </ul>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="roadmap-phase roadmap-done">
+        <div class="roadmap-status status-done">✅ COMPLETE</div>
+        <div class="roadmap-title">💰 Bankroll Management</div>
+        <div class="roadmap-features">
+            <ul>
+                <li>🛡️ Kelly Criterion stake calculator</li>
+                <li>📉 Daily loss limit protection</li>
+                <li>📋 Complete bet journal</li>
+                <li>🔥 Win/loss streak tracking</li>
+                <li>💵 Nigerian Naira (₦) support</li>
+            </ul>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # PHASE 2: IN PROGRESS
+    st.markdown("## 🚧 PHASE 2: ACCURACY BOOST")
+    st.caption("What we're working on now (Week 2-3)")
+    
+    st.markdown("""
+    <div class="roadmap-phase roadmap-progress">
+        <div class="roadmap-status status-progress">🚧 IN PROGRESS</div>
+        <div class="roadmap-title">🎯 Model Accuracy Upgrades</div>
+        <div class="roadmap-features">
+            <ul>
+                <li>⚖️ Time-weighted training (newer matches count more)</li>
+                <li>📏 Probability calibration layer</li>
+                <li>🎼 Ensemble models (XGBoost + LightGBM + CatBoost)</li>
+                <li>🧹 Data cleaning & duplicate player detection</li>
+                <li>🎯 Target: 60% → 68% winner accuracy</li>
+            </ul>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="roadmap-phase roadmap-progress">
+        <div class="roadmap-status status-progress">🚧 IN PROGRESS</div>
+        <div class="roadmap-title">📊 Paper Trading Validation</div>
+        <div class="roadmap-features">
+            <ul>
+                <li>📝 14-day paper trading period</li>
+                <li>📈 Real-world accuracy tracking</li>
+                <li>💡 Performance analysis dashboard</li>
+                <li>🎯 Identify winning bet types</li>
+            </ul>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # PHASE 3: UPCOMING
+    st.markdown("## 🔮 PHASE 3: NEXT-LEVEL FEATURES")
+    st.caption("Coming soon (Month 2)")
+    
+    st.markdown("""
+    <div class="roadmap-phase roadmap-future">
+        <div class="roadmap-status status-future">🔮 PLANNED</div>
+        <div class="roadmap-title">💬 AI Chat Coach</div>
+        <div class="roadmap-features">
+            <ul>
+                <li>🗨️ Ask questions in plain English</li>
+                <li>🎯 "Show me best picks for tonight"</li>
+                <li>📊 "Analyze this matchup"</li>
+                <li>💰 "How much should I bet?"</li>
+                <li>🧠 Powered by GPT/Claude API</li>
+            </ul>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="roadmap-phase roadmap-future">
+        <div class="roadmap-status status-future">🔮 PLANNED</div>
+        <div class="roadmap-title">🎰 Bookmaker Integration</div>
+        <div class="roadmap-features">
+            <ul>
+                <li>📡 Live SportyBet odds scraping</li>
+                <li>💎 Value detection (odds vs probability)</li>
+                <li>⚖️ Multi-bookmaker comparison</li>
+                <li>🎯 Automatic edge alerts</li>
+                <li>💰 Best odds finder</li>
+            </ul>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="roadmap-phase roadmap-future">
+        <div class="roadmap-status status-future">🔮 PLANNED</div>
+        <div class="roadmap-title">📺 Live Match Intelligence</div>
+        <div class="roadmap-features">
+            <ul>
+                <li>⚡ Real-time probability updates during matches</li>
+                <li>📊 Set-by-set predictions</li>
+                <li>🎯 Momentum shift detection</li>
+                <li>💰 Cash-out recommendations</li>
+                <li>🔔 Live value alerts</li>
+            </ul>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="roadmap-phase roadmap-future">
+        <div class="roadmap-status status-future">🔮 PLANNED</div>
+        <div class="roadmap-title">🧬 Personal Betting DNA</div>
+        <div class="roadmap-features">
+            <ul>
+                <li>📊 Your winning patterns analysis</li>
+                <li>⏰ Best times to bet for YOU</li>
+                <li>🎯 Player types you profit from</li>
+                <li>⚠️ Tilt detection & alerts</li>
+                <li>📈 Personalized strategy tips</li>
+            </ul>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # PHASE 4: FUTURE
+    st.markdown("## 🚀 PHASE 4: ELITE FEATURES")
+    st.caption("Long-term vision (Month 3+)")
+    
+    st.markdown("""
+    <div class="roadmap-phase roadmap-future">
+        <div class="roadmap-status status-future">🔮 VISION</div>
+        <div class="roadmap-title">🌟 Premium Tier</div>
+        <div class="roadmap-features">
+            <ul>
+                <li>👥 Community wisdom + AI hybrid</li>
+                <li>📱 Push notifications for hot picks</li>
+                <li>🎓 Educational content & tutorials</li>
+                <li>🏆 Leaderboard & achievements</li>
+                <li>💎 VIP tier with 1-on-1 AI coaching</li>
+            </ul>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="roadmap-phase roadmap-future">
+        <div class="roadmap-status status-future">🔮 VISION</div>
+        <div class="roadmap-title">📱 Native Mobile App</div>
+        <div class="roadmap-features">
+            <ul>
+                <li>📲 iOS & Android apps</li>
+                <li>🔔 Real-time push notifications</li>
+                <li>🎨 Native mobile UI</li>
+                <li>⚡ Faster performance</li>
+                <li>🌐 Offline mode</li>
+            </ul>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Community
+    st.markdown("### 💡 Feature Requests")
+    st.info("Have an idea? Message us via the app to suggest new features. Your input shapes OracleBet's future!")
+    
+    st.markdown("### 🎯 Our Mission")
+    st.markdown("""
+    <div class="pick-card">
+        <strong>🔮 OracleBet's Mission:</strong><br><br>
+        To provide the most <strong>accurate, transparent, and disciplined</strong> table tennis 
+        prediction platform - helping bettors make <strong>data-driven decisions</strong> instead 
+        of emotional ones.<br><br>
+        <em>We believe that with the right tools, ANYONE can become a profitable bettor. 
+        Not through luck, but through discipline, data, and consistency.</em>
     </div>
     """, unsafe_allow_html=True)
 
