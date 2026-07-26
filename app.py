@@ -198,6 +198,83 @@ st.markdown("""
         margin: 0.3rem 0;
     }
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
+
+    /* ===== CUSTOM BOTTOM NAVIGATION BAR (MOBILE-FIRST) ===== */
+    .bottom-nav {
+        position: fixed !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        background: rgba(10, 14, 39, 0.98) !important;
+        border-top: 2px solid rgba(0, 245, 255, 0.4) !important;
+        padding: 8px 4px !important;
+        z-index: 999999 !important;
+        display: flex !important;
+        justify-content: space-around !important;
+        align-items: center !important;
+        backdrop-filter: blur(20px) !important;
+        box-shadow: 0 -10px 40px rgba(0, 245, 255, 0.3) !important;
+    }
+    
+    .bottom-nav-item {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 6px 4px !important;
+        cursor: pointer !important;
+        transition: all 0.2s ease !important;
+        min-width: 44px !important;
+        text-decoration: none !important;
+        border-radius: 12px !important;
+    }
+    
+    .bottom-nav-item:hover {
+        background: rgba(0, 245, 255, 0.1) !important;
+    }
+    
+    .bottom-nav-item.active {
+        background: linear-gradient(135deg, rgba(0, 245, 255, 0.2) 0%, rgba(181, 55, 255, 0.2) 100%) !important;
+    }
+    
+    .bottom-nav-icon {
+        font-size: 20px !important;
+        margin-bottom: 2px !important;
+        display: block !important;
+    }
+    
+    .bottom-nav-label {
+        font-size: 9px !important;
+        color: #E8ECFF !important;
+        font-weight: 700 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.5px !important;
+        white-space: nowrap !important;
+    }
+    
+    .bottom-nav-item.active .bottom-nav-label {
+        color: #00F5FF !important;
+    }
+    
+    /* Add padding to bottom of page so content isn't hidden behind nav */
+    .main .block-container {
+        padding-bottom: 100px !important;
+    }
+    
+    /* Hide default streamlit sidebar toggle on mobile since we have our own nav */
+    @media (max-width: 768px) {
+        [data-testid="stSidebarCollapsedControl"],
+        [data-testid="collapsedControl"] {
+            display: none !important;
+        }
+    }
+    
+    /* Desktop: Keep default sidebar toggle */
+    @media (min-width: 769px) {
+        .bottom-nav {
+            display: none !important;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -211,14 +288,23 @@ with st.sidebar:
     
     nav_options = ["🏠 Home", "🎯 All Picks", "📡 Live", "🧠 Analyze", "📈 Track Record", "🛡️ Vault", "📊 Edge", "🗺️ Roadmap"]
     
-    page = st.radio(
+    try:
+        current_index = nav_options.index(st.session_state.current_page)
+    except ValueError:
+        current_index = 0
+    
+    sidebar_page = st.radio(
         "Navigation",
         nav_options,
-        index=nav_options.index(st.session_state.current_page) if st.session_state.current_page in nav_options else 0,
+        index=current_index,
         label_visibility="collapsed",
-        key="sidebar_nav",
+        key="sidebar_nav_selector",
     )
-    st.session_state.current_page = page
+    
+    # Sync sidebar selection to session state
+    if sidebar_page != st.session_state.current_page:
+        st.session_state.current_page = sidebar_page
+        st.rerun()
     st.divider()
     if IMPORTS_OK:
         state = load_bankroll_state()
@@ -243,6 +329,78 @@ with st.sidebar:
 if not IMPORTS_OK:
     st.error(f"⚠️ Import Error: {IMPORT_ERROR}")
     st.stop()
+
+
+# ===== CUSTOM BOTTOM NAVIGATION (MOBILE) =====
+
+# Initialize session state for page
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = "🏠 Home"
+
+# Get current page from URL query params if available
+query_params = st.query_params
+if "page" in query_params:
+    page_from_url = query_params["page"]
+    valid_pages = ["Home", "AllPicks", "Live", "Analyze", "TrackRecord", "Vault", "Edge", "Roadmap"]
+    page_map = {
+        "Home": "🏠 Home",
+        "AllPicks": "🎯 All Picks",
+        "Live": "📡 Live",
+        "Analyze": "🧠 Analyze",
+        "TrackRecord": "📈 Track Record",
+        "Vault": "🛡️ Vault",
+        "Edge": "📊 Edge",
+        "Roadmap": "🗺️ Roadmap",
+    }
+    if page_from_url in page_map:
+        st.session_state.current_page = page_map[page_from_url]
+
+# Determine active page for highlighting
+current = st.session_state.current_page
+
+def is_active(page_name):
+    return "active" if current == page_name else ""
+
+# Render bottom navigation bar
+st.markdown(f"""
+<div class="bottom-nav">
+    <a href="?page=Home" class="bottom-nav-item {is_active('🏠 Home')}" target="_self">
+        <div class="bottom-nav-icon">🏠</div>
+        <div class="bottom-nav-label">Home</div>
+    </a>
+    <a href="?page=AllPicks" class="bottom-nav-item {is_active('🎯 All Picks')}" target="_self">
+        <div class="bottom-nav-icon">🎯</div>
+        <div class="bottom-nav-label">Picks</div>
+    </a>
+    <a href="?page=Live" class="bottom-nav-item {is_active('📡 Live')}" target="_self">
+        <div class="bottom-nav-icon">📡</div>
+        <div class="bottom-nav-label">Live</div>
+    </a>
+    <a href="?page=Analyze" class="bottom-nav-item {is_active('🧠 Analyze')}" target="_self">
+        <div class="bottom-nav-icon">🧠</div>
+        <div class="bottom-nav-label">Analyze</div>
+    </a>
+    <a href="?page=TrackRecord" class="bottom-nav-item {is_active('📈 Track Record')}" target="_self">
+        <div class="bottom-nav-icon">📈</div>
+        <div class="bottom-nav-label">Record</div>
+    </a>
+    <a href="?page=Vault" class="bottom-nav-item {is_active('🛡️ Vault')}" target="_self">
+        <div class="bottom-nav-icon">🛡️</div>
+        <div class="bottom-nav-label">Vault</div>
+    </a>
+    <a href="?page=Edge" class="bottom-nav-item {is_active('📊 Edge')}" target="_self">
+        <div class="bottom-nav-icon">📊</div>
+        <div class="bottom-nav-label">Edge</div>
+    </a>
+    <a href="?page=Roadmap" class="bottom-nav-item {is_active('🗺️ Roadmap')}" target="_self">
+        <div class="bottom-nav-icon">🗺️</div>
+        <div class="bottom-nav-label">Map</div>
+    </a>
+</div>
+""", unsafe_allow_html=True)
+
+# Use session state page as the active page
+page = st.session_state.current_page
 
 
 MODEL_PATH = Path("models/setka_ml_bundle.joblib")
