@@ -70,23 +70,126 @@ st.markdown("""
     .forecast-card { background: linear-gradient(135deg, rgba(255, 184, 0, 0.1) 0%, rgba(255, 51, 102, 0.05) 100%); border: 1px solid rgba(255, 184, 0, 0.3); border-radius: 20px; padding: 1.5rem; text-align: center; margin-bottom: 1.5rem; }
     .forecast-value { font-size: 2.5rem; font-weight: 900; color: #FFB800; text-shadow: 0 0 20px rgba(255, 184, 0, 0.4); }
     .warning-card { background: rgba(255, 51, 102, 0.15); border: 2px solid #FF3366; border-radius: 16px; padding: 1rem; margin: 1rem 0; }
-    [data-testid="collapsedControl"] { display: block !important; visibility: visible !important; background: linear-gradient(135deg, #00F5FF 0%, #B537FF 100%) !important; border-radius: 50% !important; padding: 8px !important; box-shadow: 0 0 20px rgba(0, 245, 255, 0.6) !important; position: fixed !important; top: 12px !important; left: 12px !important; z-index: 999999 !important; width: 44px !important; height: 44px !important; }
-    [data-testid="collapsedControl"] svg { color: #0A0E27 !important; fill: #0A0E27 !important; }
-    @media (max-width: 768px) { [data-testid="collapsedControl"] { width: 48px !important; height: 48px !important; } .main .block-container { padding-top: 4rem !important; } }
+    /* ===== FORCE SIDEBAR TOGGLE ALWAYS VISIBLE ===== */
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"] {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        background: linear-gradient(135deg, #00F5FF 0%, #B537FF 100%) !important;
+        border-radius: 50% !important;
+        padding: 10px !important;
+        box-shadow: 0 0 25px rgba(0, 245, 255, 0.8), 0 0 50px rgba(181, 55, 255, 0.4) !important;
+        position: fixed !important;
+        top: 15px !important;
+        left: 15px !important;
+        z-index: 9999999 !important;
+        width: 50px !important;
+        height: 50px !important;
+        align-items: center !important;
+        justify-content: center !important;
+        cursor: pointer !important;
+        transition: transform 0.2s ease !important;
+    }
+    
+    [data-testid="stSidebarCollapsedControl"] svg,
+    [data-testid="collapsedControl"] svg,
+    [data-testid="stSidebarCollapsedControl"] button svg,
+    [data-testid="collapsedControl"] button svg {
+        color: #0A0E27 !important;
+        fill: #0A0E27 !important;
+        width: 28px !important;
+        height: 28px !important;
+        stroke: #0A0E27 !important;
+        stroke-width: 2.5 !important;
+    }
+    
+    [data-testid="stSidebarCollapsedControl"]:hover,
+    [data-testid="collapsedControl"]:hover {
+        transform: scale(1.15) rotate(90deg) !important;
+        box-shadow: 0 0 35px rgba(0, 245, 255, 1), 0 0 70px rgba(181, 55, 255, 0.6) !important;
+    }
+    
+    /* Add pulse animation to draw attention */
+    @keyframes pulse-glow {
+        0%, 100% { box-shadow: 0 0 25px rgba(0, 245, 255, 0.8), 0 0 50px rgba(181, 55, 255, 0.4); }
+        50% { box-shadow: 0 0 35px rgba(0, 245, 255, 1), 0 0 70px rgba(181, 55, 255, 0.7); }
+    }
+    
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"] {
+        animation: pulse-glow 2s infinite !important;
+    }
+    
+    /* Mobile responsiveness */
+    @media (max-width: 768px) {
+        [data-testid="stSidebarCollapsedControl"],
+        [data-testid="collapsedControl"] {
+            top: 20px !important;
+            left: 20px !important;
+            width: 55px !important;
+            height: 55px !important;
+        }
+        
+        .main .block-container {
+            padding-top: 5rem !important;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+    }
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
+
+
+# ===== FALLBACK MOBILE NAVIGATION =====
+# In case sidebar toggle is hidden, provide top-of-page nav
+if IMPORTS_OK:
+    # Get current page from session state or default
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = "🏠 Home"
+    
+    # Create a horizontal navigation bar at top
+    nav_cols = st.columns(5)
+    with nav_cols[0]:
+        if st.button("🏠", key="nav_home", help="Home", use_container_width=True):
+            st.session_state.current_page = "🏠 Home"
+            st.rerun()
+    with nav_cols[1]:
+        if st.button("📡", key="nav_live", help="Live", use_container_width=True):
+            st.session_state.current_page = "📡 Live"
+            st.rerun()
+    with nav_cols[2]:
+        if st.button("🧠", key="nav_analyze", help="Analyze", use_container_width=True):
+            st.session_state.current_page = "🧠 Analyze"
+            st.rerun()
+    with nav_cols[3]:
+        if st.button("🛡️", key="nav_vault", help="Vault", use_container_width=True):
+            st.session_state.current_page = "🛡️ Vault"
+            st.rerun()
+    with nav_cols[4]:
+        if st.button("📊", key="nav_edge", help="Edge", use_container_width=True):
+            st.session_state.current_page = "📊 Edge"
+            st.rerun()
+    
+    st.markdown("---")
 
 
 with st.sidebar:
     st.markdown("# 🔮 ORACLEBET")
     st.caption("The Future of Predictions")
     st.divider()
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = "🏠 Home"
+    
     page = st.radio(
         "Navigation",
         ["🏠 Home", "📡 Live", "🧠 Analyze", "🛡️ Vault", "📊 Edge"],
+        index=["🏠 Home", "📡 Live", "🧠 Analyze", "🛡️ Vault", "📊 Edge"].index(st.session_state.current_page),
         label_visibility="collapsed",
+        key="sidebar_nav",
     )
+    st.session_state.current_page = page
     st.divider()
     if IMPORTS_OK:
         state = load_bankroll_state()
