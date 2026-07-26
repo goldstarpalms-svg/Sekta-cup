@@ -198,83 +198,6 @@ st.markdown("""
         margin: 0.3rem 0;
     }
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
-
-    /* ===== CUSTOM BOTTOM NAVIGATION BAR (MOBILE-FIRST) ===== */
-    .bottom-nav {
-        position: fixed !important;
-        bottom: 0 !important;
-        left: 0 !important;
-        right: 0 !important;
-        background: rgba(10, 14, 39, 0.98) !important;
-        border-top: 2px solid rgba(0, 245, 255, 0.4) !important;
-        padding: 8px 4px !important;
-        z-index: 999999 !important;
-        display: flex !important;
-        justify-content: space-around !important;
-        align-items: center !important;
-        backdrop-filter: blur(20px) !important;
-        box-shadow: 0 -10px 40px rgba(0, 245, 255, 0.3) !important;
-    }
-    
-    .bottom-nav-item {
-        display: flex !important;
-        flex-direction: column !important;
-        align-items: center !important;
-        justify-content: center !important;
-        padding: 6px 4px !important;
-        cursor: pointer !important;
-        transition: all 0.2s ease !important;
-        min-width: 44px !important;
-        text-decoration: none !important;
-        border-radius: 12px !important;
-    }
-    
-    .bottom-nav-item:hover {
-        background: rgba(0, 245, 255, 0.1) !important;
-    }
-    
-    .bottom-nav-item.active {
-        background: linear-gradient(135deg, rgba(0, 245, 255, 0.2) 0%, rgba(181, 55, 255, 0.2) 100%) !important;
-    }
-    
-    .bottom-nav-icon {
-        font-size: 20px !important;
-        margin-bottom: 2px !important;
-        display: block !important;
-    }
-    
-    .bottom-nav-label {
-        font-size: 9px !important;
-        color: #E8ECFF !important;
-        font-weight: 700 !important;
-        text-transform: uppercase !important;
-        letter-spacing: 0.5px !important;
-        white-space: nowrap !important;
-    }
-    
-    .bottom-nav-item.active .bottom-nav-label {
-        color: #00F5FF !important;
-    }
-    
-    /* Add padding to bottom of page so content isn't hidden behind nav */
-    .main .block-container {
-        padding-bottom: 100px !important;
-    }
-    
-    /* Hide default streamlit sidebar toggle on mobile since we have our own nav */
-    @media (max-width: 768px) {
-        [data-testid="stSidebarCollapsedControl"],
-        [data-testid="collapsedControl"] {
-            display: none !important;
-        }
-    }
-    
-    /* Desktop: Keep default sidebar toggle */
-    @media (min-width: 769px) {
-        .bottom-nav {
-            display: none !important;
-        }
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -331,75 +254,110 @@ if not IMPORTS_OK:
     st.stop()
 
 
-# ===== CUSTOM BOTTOM NAVIGATION (MOBILE) =====
-
-# Initialize session state for page
+# ===== BRIGHT TOP NAVIGATION BAR =====
 if 'current_page' not in st.session_state:
     st.session_state.current_page = "🏠 Home"
 
-# Get current page from URL query params if available
-query_params = st.query_params
-if "page" in query_params:
-    page_from_url = query_params["page"]
-    valid_pages = ["Home", "AllPicks", "Live", "Analyze", "TrackRecord", "Vault", "Edge", "Roadmap"]
-    page_map = {
-        "Home": "🏠 Home",
-        "AllPicks": "🎯 All Picks",
-        "Live": "📡 Live",
-        "Analyze": "🧠 Analyze",
-        "TrackRecord": "📈 Track Record",
-        "Vault": "🛡️ Vault",
-        "Edge": "📊 Edge",
-        "Roadmap": "🗺️ Roadmap",
+# Custom CSS for top nav buttons - BRIGHT and VISIBLE
+st.markdown("""
+<style>
+    /* Top nav container */
+    .top-nav-container {
+        background: linear-gradient(90deg, #FF3366 0%, #B537FF 25%, #00F5FF 50%, #00FF9C 75%, #FFB800 100%);
+        padding: 3px;
+        border-radius: 20px;
+        margin: 0 0 1.5rem 0;
+        box-shadow: 0 0 30px rgba(0, 245, 255, 0.5);
     }
-    if page_from_url in page_map:
-        st.session_state.current_page = page_map[page_from_url]
-
-# Determine active page for highlighting
-current = st.session_state.current_page
-
-def is_active(page_name):
-    return "active" if current == page_name else ""
-
-# Render bottom navigation bar
-st.markdown(f"""
-<div class="bottom-nav">
-    <a href="?page=Home" class="bottom-nav-item {is_active('🏠 Home')}" target="_self">
-        <div class="bottom-nav-icon">🏠</div>
-        <div class="bottom-nav-label">Home</div>
-    </a>
-    <a href="?page=AllPicks" class="bottom-nav-item {is_active('🎯 All Picks')}" target="_self">
-        <div class="bottom-nav-icon">🎯</div>
-        <div class="bottom-nav-label">Picks</div>
-    </a>
-    <a href="?page=Live" class="bottom-nav-item {is_active('📡 Live')}" target="_self">
-        <div class="bottom-nav-icon">📡</div>
-        <div class="bottom-nav-label">Live</div>
-    </a>
-    <a href="?page=Analyze" class="bottom-nav-item {is_active('🧠 Analyze')}" target="_self">
-        <div class="bottom-nav-icon">🧠</div>
-        <div class="bottom-nav-label">Analyze</div>
-    </a>
-    <a href="?page=TrackRecord" class="bottom-nav-item {is_active('📈 Track Record')}" target="_self">
-        <div class="bottom-nav-icon">📈</div>
-        <div class="bottom-nav-label">Record</div>
-    </a>
-    <a href="?page=Vault" class="bottom-nav-item {is_active('🛡️ Vault')}" target="_self">
-        <div class="bottom-nav-icon">🛡️</div>
-        <div class="bottom-nav-label">Vault</div>
-    </a>
-    <a href="?page=Edge" class="bottom-nav-item {is_active('📊 Edge')}" target="_self">
-        <div class="bottom-nav-icon">📊</div>
-        <div class="bottom-nav-label">Edge</div>
-    </a>
-    <a href="?page=Roadmap" class="bottom-nav-item {is_active('🗺️ Roadmap')}" target="_self">
-        <div class="bottom-nav-icon">🗺️</div>
-        <div class="bottom-nav-label">Map</div>
-    </a>
-</div>
+    
+    .top-nav-inner {
+        background: #0A0E27;
+        border-radius: 17px;
+        padding: 12px 8px;
+    }
+    
+    /* Force buttons in nav to be highly visible */
+    div[data-testid="column"] .stButton button {
+        background: linear-gradient(135deg, #1a1f4a 0%, #0A0E27 100%) !important;
+        border: 2px solid rgba(0, 245, 255, 0.5) !important;
+        color: #E8ECFF !important;
+        font-size: 1.2rem !important;
+        padding: 0.8rem 0.3rem !important;
+        border-radius: 12px !important;
+        transition: all 0.2s ease !important;
+        min-height: 60px !important;
+        width: 100% !important;
+    }
+    
+    div[data-testid="column"] .stButton button:hover {
+        background: linear-gradient(135deg, #00F5FF 0%, #B537FF 100%) !important;
+        border-color: #00FF9C !important;
+        box-shadow: 0 0 20px rgba(0, 245, 255, 0.8) !important;
+        transform: translateY(-3px) !important;
+        color: #0A0E27 !important;
+    }
+    
+    /* Active button style */
+    .nav-active button {
+        background: linear-gradient(135deg, #00FF9C 0%, #00F5FF 100%) !important;
+        border-color: #FFB800 !important;
+        color: #0A0E27 !important;
+        box-shadow: 0 0 25px rgba(0, 255, 156, 0.6) !important;
+    }
+    
+    /* Page indicator */
+    .page-indicator {
+        text-align: center;
+        color: #00F5FF;
+        font-size: 0.85rem;
+        font-weight: 700;
+        margin-bottom: 1rem;
+        text-transform: uppercase;
+        letter-spacing: 3px;
+        padding: 0.5rem;
+        background: rgba(0, 245, 255, 0.05);
+        border-radius: 8px;
+        border: 1px solid rgba(0, 245, 255, 0.2);
+    }
+</style>
 """, unsafe_allow_html=True)
 
-# Use session state page as the active page
+# Current page indicator (helps user know where they are)
+st.markdown(f'<div class="page-indicator">📍 Current: {st.session_state.current_page}</div>', unsafe_allow_html=True)
+
+# BRIGHT TOP NAVIGATION - Uses native Streamlit buttons (guaranteed to work)
+nav_cols = st.columns(8)
+
+nav_items = [
+    ("🏠", "Home", "🏠 Home", nav_cols[0]),
+    ("🎯", "Picks", "🎯 All Picks", nav_cols[1]),
+    ("📡", "Live", "📡 Live", nav_cols[2]),
+    ("🧠", "Analyze", "🧠 Analyze", nav_cols[3]),
+    ("📈", "Record", "📈 Track Record", nav_cols[4]),
+    ("🛡️", "Vault", "🛡️ Vault", nav_cols[5]),
+    ("📊", "Edge", "📊 Edge", nav_cols[6]),
+    ("🗺️", "Map", "🗺️ Roadmap", nav_cols[7]),
+]
+
+for icon, label, page_name, col in nav_items:
+    with col:
+        is_current = st.session_state.current_page == page_name
+        button_key = f"topnav_{label.lower()}"
+        
+        # Wrap active button in special class
+        if is_current:
+            st.markdown('<div class="nav-active">', unsafe_allow_html=True)
+        
+        if st.button(f"{icon}\n{label}", key=button_key, use_container_width=True):
+            st.session_state.current_page = page_name
+            st.rerun()
+        
+        if is_current:
+            st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown("---")
+
+# Set page variable from session state
 page = st.session_state.current_page
 
 
