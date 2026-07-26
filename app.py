@@ -203,7 +203,7 @@ with st.sidebar:
     if 'current_page' not in st.session_state:
         st.session_state.current_page = "🏠 Home"
     
-    nav_options = ["🏠 Home", "📡 Live", "🧠 Analyze", "🛡️ Vault", "📊 Edge", "🗺️ Roadmap"]
+    nav_options = ["🏠 Home", "🎯 All Picks", "📡 Live", "🧠 Analyze", "🛡️ Vault", "📊 Edge", "🗺️ Roadmap"]
     
     page = st.radio(
         "Navigation",
@@ -765,6 +765,316 @@ elif page == "📊 Edge":
         <em>Remember: No model is perfect. Always paper trade first, bet responsibly, and never chase losses.</em>
     </div>
     """, unsafe_allow_html=True)
+
+
+# ============================================
+# ALL PICKS PAGE
+# ============================================
+elif page == "🎯 All Picks":
+    st.markdown("# 🎯 ALL UPCOMING PICKS")
+    st.caption("Complete predictions across all markets")
+    
+    state = load_bankroll_state()
+    current_bankroll = state["current_bankroll"]
+    
+    bundle, model_error = get_model_bundle()
+    matches, match_error = get_upcoming_matches()
+    
+    if model_error:
+        st.warning(f"⚠️ ML Model: {model_error}")
+    
+    if match_error:
+        st.warning(f"⚠️ Matches: {match_error}")
+        st.stop()
+    
+    if matches.empty:
+        st.info("😴 No upcoming matches found. Check back during match hours.")
+        st.stop()
+    
+    # ===== FILTERS =====
+    st.markdown("### 🔍 Filters")
+    filter_col1, filter_col2, filter_col3 = st.columns(3)
+    
+    with filter_col1:
+        min_conf_filter = st.slider(
+            "Min Winner Confidence (%)",
+            min_value=50,
+            max_value=90,
+            value=int(state["min_confidence"] * 100),
+            step=5,
+        )
+    
+    with filter_col2:
+        market_filter = st.multiselect(
+            "Show Markets",
+            ["Winner", "Total Points", "First Set O/U", "Sets O/U"],
+            default=["Winner", "Total Points", "First Set O/U", "Sets O/U"],
+        )
+    
+    with filter_col3:
+        limit = st.selectbox(
+            "Max Matches to Show",
+            [10, 25, 50, 100, "All"],
+            index=1,
+        )
+    
+    st.markdown("---")
+    
+    # ===== IMPORT RULE-BASED PREDICTOR for extra markets =====
+    try:
+        from src.setka_core import predict_match, build_context
+        rule_ctx = build_context(load_raw_data()[0], load_raw_data()[1])
+        rule_available = True
+    except Exception as exc:
+        rule_available = False
+        st.warning(f"Rule model unavailable: {exc}")
+    
+    # ===== GENERATE ALL PREDICTIONS =====
+    all_predictions = []
+    max_matches = len(matches) if limit == "All" else int(limit)
+    
+    with st.spinner(f"🔮 Analyzing {min(max_matches, len(matches))} matches..."):
+        for _, match in matches.head(max_matches).iterrows():
+            try:
+                p1 = match["player1"]
+                p2 = match["player2"]
+                
+                # ML prediction (Winner)
+                ml_pred = None
+                if bundle:
+                    try:
+                        ml_pred = predict_with_bundle(bundle, p1, p2, current_dt=pd.Timestamp.now())
+                    except Exception:
+                        pass
+                
+                # Rule-based prediction (for Total Points, First Set, Sets)
+                rule_pred = None
+                if rule_available:
+                    try:
+                        rule_pred = predict_match(
+                            p1, p2,
+                            rule_ctx["player_stats"],
+                            rule_ctx["matches"],
+                            rule_ctx["global_stats"],
+                            first_set_line=18.5,
+                            total_points_line=75.5,
+                            sets_line=3.5,
+                        )
+                    except Exception:
+                        pass
+                
+                # Combine predictions
+                if not ml_pred and not rule_pred:
+                    continue
+                
+                # Winner (use ML if available, else rule)
+                if ml_pred:
+                    winner_prob = max(ml_pred["player_a_win_probability"], ml_pred["player_b_win_probability"])
+                    predicted_winner = ml_pred["predicted_winner"]
+                else:
+                    winner_prob = max(rule_pred["player_a_win_probability"], rule_pred["player_b_win_probability"])
+                    predicted_winner = rule_pred["predicted_winner"]
+                
+                # Filter by min confidence
+                if winner_prob * 100 < min_conf_filter:
+                    continue
+                
+                pred_data = {
+                    "match": f"{p1} vs {p2}",
+                    "player1": p1,
+                    "player2": p2,
+                    "time": match.get("start_time_lagos", "TBD"),
+                    "date": match.get("start_date_lagos", ""),
+                    "location": match.get("location", "Setka Cup"),
+                    "winner_pred": predicted_winner,
+                    "winner_prob": winner_prob,
+                    "ml_pred": ml_pred,
+                    "rule_pred": rule_pred,
+                }
+                
+                # Add totals if rule model available
+                if rule_pred:
+                    total_over = rule_pred.get("total_points_over_probability", 0.5)
+                    total_under = rule_pred.get("total_points_under_probability", 0.5)
+                    pred_data["total_pick"] = "Over 75.5" if total_over > total_under else "Under 75.5"
+                    pred_data["total_prob"] = max(total_over, total_under)
+                    pred_data["expected_total"] = rule_pred.get("expected_total_points", 0)
+                    
+                    first_over = rule_pred.get("first_set_over_probability", 0.5)
+                    first_under = rule_pred.get("first_set_under_probability", 0.5)
+                    pred_data["first_pick"] = "Over 18.5" if first_over > first_under else "Under 18.5"
+                    pred_data["first_prob"] = max(first_over, first_under)
+                    pred_data["expected_first"] = rule_pred.get("expected_first_set_points", 0)
+                    
+                    sets_over = rule_pred.get("sets_over_probability", 0.5)
+                    sets_under = rule_pred.get("sets_under_probability", 0.5)
+                    pred_data["sets_pick"] = "Over 3.5" if sets_over > sets_under else "Under 3.5"
+                    pred_data["sets_prob"] = max(sets_over, sets_under)
+                    pred_data["expected_sets"] = rule_pred.get("expected_sets_played", 0)
+                
+                all_predictions.append(pred_data)
+                
+            except Exception:
+                continue
+    
+    # Sort by winner confidence
+    all_predictions.sort(key=lambda x: x["winner_prob"], reverse=True)
+    
+    if not all_predictions:
+        st.info(f"🌙 No matches meet the {min_conf_filter}% confidence threshold. Lower the filter to see more.")
+        st.stop()
+    
+    # ===== SUMMARY STATS =====
+    st.markdown(f"### 📊 Found {len(all_predictions)} Matches")
+    
+    summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
+    
+    winner_picks = [p for p in all_predictions if p["winner_prob"] >= 0.65]
+    with summary_col1:
+        st.metric("🎯 Strong Winners", len(winner_picks))
+    
+    total_picks = [p for p in all_predictions if p.get("total_prob", 0) >= 0.60]
+    with summary_col2:
+        st.metric("📊 Total Picks", len(total_picks))
+    
+    first_picks = [p for p in all_predictions if p.get("first_prob", 0) >= 0.60]
+    with summary_col3:
+        st.metric("⚡ 1st Set Picks", len(first_picks))
+    
+    sets_picks = [p for p in all_predictions if p.get("sets_prob", 0) >= 0.60]
+    with summary_col4:
+        st.metric("🎾 Sets Picks", len(sets_picks))
+    
+    st.markdown("---")
+    
+    # ===== DISPLAY ALL PICKS =====
+    st.markdown("### 🏓 All Matches with Predictions")
+    
+    for idx, pred in enumerate(all_predictions):
+        # Confidence color coding
+        conf_pct = pred["winner_prob"] * 100
+        if conf_pct >= 70:
+            border_color = "#00FF9C"
+            conf_emoji = "🔥"
+        elif conf_pct >= 60:
+            border_color = "#00F5FF"
+            conf_emoji = "⭐"
+        else:
+            border_color = "#FFB800"
+            conf_emoji = "⚠️"
+        
+        # Fair odds & Kelly for winner
+        fair_odds = fair_odds_from_probability(pred["winner_prob"])
+        market_odds = fair_odds * 0.95
+        kelly = kelly_stake(
+            current_bankroll,
+            pred["winner_prob"],
+            market_odds,
+            state["kelly_fraction"],
+            state["min_stake"],
+            state["max_stake_pct"],
+        )
+        
+        # Build the card HTML
+        card_html = f"""
+        <div class="pick-card" style="border-left: 4px solid {border_color};">
+            <div class="pick-title">{conf_emoji} {pred["match"]}</div>
+            <div class="pick-time">⏰ {pred["time"]} • {pred["location"]}</div>
+        """
+        
+        # Winner section (always show)
+        if "Winner" in market_filter:
+            card_html += f"""
+            <div style="background: rgba(0, 245, 255, 0.05); padding: 0.8rem; border-radius: 10px; margin: 0.5rem 0;">
+                <div style="color: #B537FF; font-size: 0.85rem; font-weight: 700; text-transform: uppercase;">🎯 Winner</div>
+                <div style="font-size: 1.3rem; font-weight: 900; color: #00FF9C; margin: 0.3rem 0;">{pred["winner_pred"]}</div>
+                <div class="confidence-bar"><div class="confidence-fill" style="width: {conf_pct}%"></div></div>
+                <div style="display: flex; justify-content: space-between; margin-top: 0.3rem; font-size: 0.85rem;">
+                    <span style="color: #E8ECFF;">Confidence: <strong style="color: #00F5FF;">{conf_pct:.1f}%</strong></span>
+                    <span style="color: #E8ECFF;">Odds: <strong style="color: #00F5FF;">{market_odds:.2f}</strong></span>
+                    <span style="color: #E8ECFF;">Kelly: <strong style="color: #00F5FF;">{format_currency(kelly['stake'])}</strong></span>
+                </div>
+            </div>
+            """
+        
+        # Total Points section
+        if "Total Points" in market_filter and pred.get("total_pick"):
+            total_pct = pred["total_prob"] * 100
+            total_odds = fair_odds_from_probability(pred["total_prob"]) * 0.95
+            total_kelly = kelly_stake(current_bankroll, pred["total_prob"], total_odds, state["kelly_fraction"], state["min_stake"], state["max_stake_pct"])
+            
+            card_html += f"""
+            <div style="background: rgba(181, 55, 255, 0.05); padding: 0.8rem; border-radius: 10px; margin: 0.5rem 0;">
+                <div style="color: #B537FF; font-size: 0.85rem; font-weight: 700; text-transform: uppercase;">📊 Total Points</div>
+                <div style="font-size: 1.1rem; font-weight: 900; color: #FFB800; margin: 0.3rem 0;">{pred["total_pick"]}</div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
+                    <span style="color: #E8ECFF;">Prob: <strong style="color: #00F5FF;">{total_pct:.1f}%</strong></span>
+                    <span style="color: #E8ECFF;">Expected: <strong style="color: #00F5FF;">{pred["expected_total"]:.1f}</strong></span>
+                    <span style="color: #E8ECFF;">Kelly: <strong style="color: #00F5FF;">{format_currency(total_kelly['stake'])}</strong></span>
+                </div>
+            </div>
+            """
+        
+        # First Set Over/Under
+        if "First Set O/U" in market_filter and pred.get("first_pick"):
+            first_pct = pred["first_prob"] * 100
+            first_odds = fair_odds_from_probability(pred["first_prob"]) * 0.95
+            first_kelly = kelly_stake(current_bankroll, pred["first_prob"], first_odds, state["kelly_fraction"], state["min_stake"], state["max_stake_pct"])
+            
+            card_html += f"""
+            <div style="background: rgba(0, 255, 156, 0.05); padding: 0.8rem; border-radius: 10px; margin: 0.5rem 0;">
+                <div style="color: #B537FF; font-size: 0.85rem; font-weight: 700; text-transform: uppercase;">⚡ First Set 18.5</div>
+                <div style="font-size: 1.1rem; font-weight: 900; color: #00FF9C; margin: 0.3rem 0;">{pred["first_pick"]}</div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
+                    <span style="color: #E8ECFF;">Prob: <strong style="color: #00F5FF;">{first_pct:.1f}%</strong></span>
+                    <span style="color: #E8ECFF;">Expected: <strong style="color: #00F5FF;">{pred["expected_first"]:.1f}</strong></span>
+                    <span style="color: #E8ECFF;">Kelly: <strong style="color: #00F5FF;">{format_currency(first_kelly['stake'])}</strong></span>
+                </div>
+            </div>
+            """
+        
+        # Sets Over/Under
+        if "Sets O/U" in market_filter and pred.get("sets_pick"):
+            sets_pct = pred["sets_prob"] * 100
+            sets_odds = fair_odds_from_probability(pred["sets_prob"]) * 0.95
+            sets_kelly = kelly_stake(current_bankroll, pred["sets_prob"], sets_odds, state["kelly_fraction"], state["min_stake"], state["max_stake_pct"])
+            
+            card_html += f"""
+            <div style="background: rgba(255, 184, 0, 0.05); padding: 0.8rem; border-radius: 10px; margin: 0.5rem 0;">
+                <div style="color: #B537FF; font-size: 0.85rem; font-weight: 700; text-transform: uppercase;">🎾 Sets 3.5</div>
+                <div style="font-size: 1.1rem; font-weight: 900; color: #FFB800; margin: 0.3rem 0;">{pred["sets_pick"]}</div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
+                    <span style="color: #E8ECFF;">Prob: <strong style="color: #00F5FF;">{sets_pct:.1f}%</strong></span>
+                    <span style="color: #E8ECFF;">Expected: <strong style="color: #00F5FF;">{pred["expected_sets"]:.1f}</strong></span>
+                    <span style="color: #E8ECFF;">Kelly: <strong style="color: #00F5FF;">{format_currency(sets_kelly['stake'])}</strong></span>
+                </div>
+            </div>
+            """
+        
+        # AI reasoning (if ML pred available)
+        if pred.get("ml_pred"):
+            reason = generate_ai_reasoning(pred["ml_pred"], pred["player1"], pred["player2"])
+            card_html += f'<div class="ai-analysis" style="font-size: 0.85rem;">🧠 {reason}</div>'
+        
+        card_html += "</div>"
+        
+        st.markdown(card_html, unsafe_allow_html=True)
+        
+        # Track bet button for the winner
+        if kelly['stake'] > 0 and pred["winner_prob"] >= 0.65:
+            if st.button(f"📝 Track Winner Bet ({format_currency(kelly['stake'])})", key=f"track_all_{idx}"):
+                add_bet(state, {
+                    "match": pred["match"],
+                    "player1": pred["player1"],
+                    "player2": pred["player2"],
+                    "prediction": pred["winner_pred"],
+                    "confidence": pred["winner_prob"],
+                    "stake": kelly['stake'],
+                    "odds": market_odds,
+                    "market": "match_winner",
+                })
+                st.success("✅ Tracked in Vault!")
+                st.rerun()
 
 
 # ============================================
