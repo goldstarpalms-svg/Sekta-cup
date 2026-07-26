@@ -635,6 +635,12 @@ def train_model_bundle(matches, algorithm="xgboost", max_training_rows=None,
         "train_rows": len(train_df),
         "test_rows": len(test_df),
         "total_rows": len(features_df),
+        "rows_used": len(features_df),
+        "n_rows": len(features_df),
+        "n_train": len(train_df),
+        "n_test": len(test_df),
+        "n_models": len(models),
+        "n_features": len(FEATURE_COLUMNS),
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }
     return bundle
@@ -644,7 +650,14 @@ def metrics_table(bundle):
     return pd.DataFrame(bundle.get("metrics", []))
 
 
-def predict_with_bundle(bundle, player_a, player_b, current_dt=None):
+def predict_with_bundle(bundle, player_a, player_b, current_dt=None,
+                        first_set_line=18.5, total_points_line=75.5, sets_line=3.5):
+    """Enhanced ML prediction returning a dict compatible with the app's UI layer.
+
+    Returns fields matching the rule-based predict_match() so prediction_pick_row
+    can swap in ML predictions transparently.  Sets over/under is a fallback
+    (0.5) because the ML pipeline does not model set count directly.
+    """
     state = bundle["state"]
     models = bundle["models"]
     if current_dt is None:
@@ -652,18 +665,99 @@ def predict_with_bundle(bundle, player_a, player_b, current_dt=None):
     features = make_feature_row(state, player_a, player_b, current_dt)
     X = pd.DataFrame([features])[FEATURE_COLUMNS].fillna(0.0)
     winner_prob = float(_predict_probability(models["winner"], X)[0])
-    first_over_prob = float(_predict_probability(models["first_set_over_18_5"], X)[0])
+    first_over_18_5_prob = float(_predict_probability(models["first_set_over_18_5"], X)[0])
     total_pred = float(models["total_points"].predict(X)[0])
     first_pts_pred = float(models["first_set_points"].predict(X)[0])
+
+    player_a_win_probability = winner_prob
+    player_b_win_probability = 1.0 - winner_prob
+
+    # --- confidence score (0-100 scale, higher = better) ---
+    max_winner_prob = max(winner_prob, player_b_win_probability)
+    if max_winner_prob >= 0.65:
+        confidence = "High"
+    elif max_winner_prob >= 0.55:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+    confidence_score = max_winner_prob * 100.0
+
+    # --- calibration residuals from holdout metrics ---
+    total_residual_std = None
+    first_residual_std = None
+    for m in bundle.get("metrics", []):
+        if m["model"] == "total_points":
+            total_residual_std = m.get("residual_std")
+        elif m["model"] == "first_set_points":
+            first_residual_std = m.get("residual_std")
+
+    # --- total points over/under via normal CDF ---
+    if total_residual_std and total_residual_std > 0.1:
+        total_over_prob = _normal_over_probability(total_pred, total_points_line, total_residual_std)
+    else:
+        total_over_prob = 0.5
+    total_under_prob = 1.0 - total_over_prob
+
+    # --- first-set over/under ---
+    if abs(first_set_line - 18.5) < 0.01:
+        first_over_prob = first_over_18_5_prob
+    elif first_residual_std and first_residual_std > 0.1:
+        first_over_prob = _normal_over_probability(first_pts_pred, first_set_line, first_residual_std)
+    else:
+        first_over_prob = 0.5
+    first_under_prob = 1.0 - first_over_prob
+
+    # --- Elo ---
+    a_elo = state.elo_for(player_a)
+    b_elo = state.elo_for(player_b)
+    elo_diff = a_elo - b_elo
+    elo_prob = _elo_probability(a_elo, b_elo)
+
+    # --- H2H ---
+    h2h_obj = state.h2h(player_a, player_b)
+    h2h_f = h2h_obj.as_features(player_a, state.defaults)
+    h2h_matches = int(h2h_f["h2h_matches"])
+
+    # --- upset-risk heuristics (simplified, using ML's own features) ---
+    upset_risk_flags = []
+    if max_winner_prob < 0.58:
+        upset_risk_flags.append("weak winner edge")
+    if h2h_matches >= 6 and ((player_a_win_probability >= 0.5 and h2h_f["h2h_a_win_rate"] < 0.40)
+                              or (player_a_win_probability < 0.5 and h2h_f["h2h_a_win_rate"] > 0.60)):
+        upset_risk_flags.append("H2H conflict")
+    upset_risk = "Low" if not upset_risk_flags and max_winner_prob >= 0.62 else \
+                 "Medium" if len(upset_risk_flags) <= 1 else "High"
+
     return {
         "player_a": player_a,
         "player_b": player_b,
-        "player_a_win_probability": winner_prob,
-        "player_b_win_probability": 1.0 - winner_prob,
-        "predicted_winner": player_a if winner_prob >= 0.5 else player_b,
-        "first_set_over_18_5_probability": first_over_prob,
-        "predicted_total_points": total_pred,
-        "predicted_first_set_points": first_pts_pred,
+        "player_a_win_probability": player_a_win_probability,
+        "player_b_win_probability": player_b_win_probability,
+        "predicted_winner": player_a if player_a_win_probability >= 0.5 else player_b,
+        "elo_probability": elo_prob,
+        "elo_a": a_elo,
+        "elo_b": b_elo,
+        "elo_diff": elo_diff,
+        "h2h_matches": h2h_matches,
+        "h2h_player_a_wins": int(h2h_f["h2h_a_win_rate"] * h2h_f["h2h_matches"]),
+        "h2h_player_b_wins": h2h_matches - int(h2h_f["h2h_a_win_rate"] * h2h_f["h2h_matches"]),
+        "h2h_player_a_win_rate": h2h_f["h2h_a_win_rate"],
+        "upset_risk": upset_risk,
+        "upset_risk_flags": upset_risk_flags,
+        "confidence": confidence,
+        "confidence_score": confidence_score,
+        "first_set_over_probability": first_over_prob,
+        "first_set_under_probability": first_under_prob,
+        "first_set_line": float(first_set_line),
+        "expected_first_set_points": first_pts_pred,
+        "total_points_over_probability": total_over_prob,
+        "total_points_under_probability": total_under_prob,
+        "total_points_line": float(total_points_line),
+        "expected_total_points": total_pred,
+        "expected_sets_played": 0.0,
+        "sets_line": float(sets_line),
+        "sets_over_probability": 0.5,
+        "sets_under_probability": 0.5,
         "features": features,
     }
 
