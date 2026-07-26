@@ -1,1839 +1,2934 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+import re
 from pathlib import Path
 
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
+
+from src.backtesting import run_holdout_backtest, threshold_table
+from src.github_storage import github_storage_enabled
+from src.model_intelligence import (
+    calibrated_probability,
+    market_confidence_label,
+    match_fatigue_summary,
+    player_reliability_tags,
+    winner_component_agreement,
+)
+from src.persistence import (
+    BANKROLL_JOURNAL_FILE,
+    DAILY_RESULTS_FILE,
+    STRONG_PICKS_FILE,
+    load_bankroll_journal,
+    load_daily_results,
+    load_strong_picks,
+    official_results_to_match_history,
+    reset_bankroll_journal,
+    reset_daily_results,
+    reset_strong_picks,
+    save_bankroll_journal,
+    save_daily_results,
+    save_strong_picks,
+)
+from src.setka_core import (
+    build_context,
+    comparison_table,
+    format_number,
+    format_percent,
+    get_head_to_head,
+    load_raw_data,
+    predict_match,
+)
 
 try:
-    from src.ml_pipeline import load_model_bundle, predict_with_bundle
-    from src.setka_core import load_raw_data
+    from src.ml_pipeline import (
+        load_model_bundle,
+        metrics_table,
+        predict_with_bundle,
+        save_model_bundle,
+        train_model_bundle,
+    )
+
+    ML_IMPORT_ERROR = None
+except Exception as exc:  # pragma: no cover - shown inside the UI
+    ML_IMPORT_ERROR = exc
+
+try:
+    from src.odds_api import (
+        OddsAPIError,
+        add_implied_probabilities,
+        fetch_odds,
+        list_sports,
+        normalize_odds_events,
+    )
     from src.setka_live import (
-        fetch_nearest_matches,
-        fetch_live_matches,
+        OFFICIAL_SETKA_URL,
         add_lagos_time,
         add_location_names,
+        fetch_live_matches,
+        fetch_nearest_matches,
+        fetch_official_site_status,
+        fetch_results_for_date,
         location_map,
+        status_as_dict,
     )
-    from src.bankroll import (
-        load_bankroll_state,
-        save_bankroll_state,
-        kelly_stake,
-        fair_odds_from_probability,
-        add_bet,
-        settle_bet,
-        calculate_daily_pnl,
-        calculate_stats,
-        format_currency,
-        check_loss_limit,
-    )
-    from src.predictions_tracker import (
-        load_predictions,
-        add_prediction,
-        update_prediction_result,
-        calculate_track_record,
-    )
-    IMPORTS_OK = True
-    IMPORT_ERROR = None
-except Exception as exc:
-    IMPORTS_OK = False
-    IMPORT_ERROR = str(exc)
+    from src.source_registry import categories as source_categories
+    from src.source_registry import registry_dataframe, summary_by_category
+
+    ODDS_IMPORT_ERROR = None
+except Exception as exc:  # pragma: no cover - shown inside the UI
+    ODDS_IMPORT_ERROR = exc
+
 
 st.set_page_config(
-    page_title="OracleBet 🔮",
-    page_icon="🔮",
+    page_title="Setka Predictor",
+    page_icon="🏓",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.markdown("""
+# Optional permanent storage via GitHub. Add these in Streamlit secrets:
+# GITHUB_STORAGE_TOKEN, GITHUB_STORAGE_REPO, GITHUB_STORAGE_BRANCH, GITHUB_STORAGE_PREFIX
+try:
+    for key in [
+        "GITHUB_STORAGE_TOKEN",
+        "GITHUB_STORAGE_REPO",
+        "GITHUB_STORAGE_BRANCH",
+        "GITHUB_STORAGE_PREFIX",
+    ]:
+        value = st.secrets.get(key)
+        if value:
+            os.environ[key] = str(value)
+except Exception:
+    pass
+
+
+CUSTOM_CSS = """
 <style>
-    /* Hide default streamlit padding at top */
-    .main .block-container {
-        padding-top: 1rem !important;
-        max-width: 1200px;
-    }
-    
-    /* Top nav container - clean and professional */
-    .nav-wrapper {
-        background: #0F1729;
-        border-bottom: 1px solid rgba(0, 255, 156, 0.2);
-        padding: 12px 0;
-        margin: -1rem -1rem 1.5rem -1rem;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-    }
-    
-    /* Brand logo area */
-    .brand-area {
-        text-align: center;
-        margin-bottom: 12px;
-        padding: 0 1rem;
-    }
-    
-    .brand-logo {
-        font-size: 1.6rem;
-        font-weight: 900;
-        background: linear-gradient(135deg, #00FF9C 0%, #00F5FF 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        letter-spacing: -0.5px;
-    }
-    
-    .brand-tagline {
-        color: #6B7280;
-        font-size: 0.7rem;
-        text-transform: uppercase;
-        letter-spacing: 2px;
-        margin-top: -2px;
-    }
-    
-    /* Nav buttons override */
-    div[data-testid="column"] .stButton button {
-        background: transparent !important;
-        border: 1px solid rgba(107, 114, 128, 0.3) !important;
-        color: #9CA3AF !important;
-        font-size: 0.75rem !important;
-        font-weight: 600 !important;
-        padding: 0.6rem 0.2rem !important;
-        border-radius: 10px !important;
-        transition: all 0.15s ease !important;
-        min-height: 55px !important;
-        width: 100% !important;
-        letter-spacing: 0.3px !important;
-    }
-    
-    div[data-testid="column"] .stButton button:hover {
-        background: rgba(0, 255, 156, 0.08) !important;
-        border-color: rgba(0, 255, 156, 0.4) !important;
-        color: #00FF9C !important;
-        transform: translateY(-1px) !important;
-    }
-    
-    /* Active button indicator */
-    .active-nav-btn button {
-        background: linear-gradient(135deg, rgba(0, 255, 156, 0.15) 0%, rgba(0, 245, 255, 0.1) 100%) !important;
-        border-color: #00FF9C !important;
-        color: #00FF9C !important;
-        box-shadow: 0 0 15px rgba(0, 255, 156, 0.2) !important;
-        font-weight: 800 !important;
-    }
-    
-    /* Content area */
-    .stApp {
-        background: #0A0E1F !important;
-    }
-    
-    /* Better metric styling */
-    [data-testid="stMetric"] {
-        background: linear-gradient(135deg, #131b30 0%, #0F1729 100%) !important;
-        border: 1px solid rgba(0, 255, 156, 0.15) !important;
-        border-radius: 12px !important;
-        padding: 1.2rem !important;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
-    }
-    
-    [data-testid="stMetricValue"] {
-        color: #00FF9C !important;
-        font-size: 1.6rem !important;
-        font-weight: 800 !important;
-    }
-    
-    [data-testid="stMetricLabel"] {
-        color: #6B7280 !important;
-        font-weight: 600 !important;
-        text-transform: uppercase !important;
-        letter-spacing: 1.5px !important;
-        font-size: 0.75rem !important;
-    }
-    
-    [data-testid="stMetricDelta"] {
-        color: #00F5FF !important;
-    }
-    
-    /* Pick cards - clean saferstake style */
-    .pick-card {
-        background: linear-gradient(135deg, #131b30 0%, #0F1729 100%) !important;
-        border: 1px solid rgba(255, 255, 255, 0.05) !important;
-        border-radius: 14px !important;
-        padding: 1.3rem !important;
-        margin-bottom: 1rem !important;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
-        transition: all 0.2s ease !important;
-    }
-    
-    .pick-card:hover {
-        border-color: rgba(0, 255, 156, 0.3) !important;
-        box-shadow: 0 8px 30px rgba(0, 255, 156, 0.15) !important;
-    }
-    
-    .pick-card-top {
-        border: 1px solid #00FF9C !important;
-        box-shadow: 0 4px 30px rgba(0, 255, 156, 0.2) !important;
-    }
-    
-    /* Page title styling */
-    h1 {
-        color: #FFFFFF !important;
-        font-size: 1.8rem !important;
-        font-weight: 800 !important;
-        letter-spacing: -0.5px !important;
-        text-shadow: none !important;
-    }
-    
-    h2 {
-        color: #FFFFFF !important;
-        font-size: 1.3rem !important;
-        font-weight: 700 !important;
-    }
-    
-    h3 {
-        color: #E5E7EB !important;
-        font-size: 1.1rem !important;
-        font-weight: 700 !important;
-    }
-    
-    /* Text colors */
-    p, .stMarkdown {
-        color: #D1D5DB !important;
-    }
-    
-    .stCaption {
-        color: #6B7280 !important;
-    }
-    
-    /* Primary CTA button style */
-    .stButton > button[kind="primary"] {
-        background: linear-gradient(135deg, #00FF9C 0%, #00F5FF 100%) !important;
-        color: #0A0E1F !important;
-        border: none !important;
-        font-weight: 800 !important;
-        padding: 0.8rem 2rem !important;
-        border-radius: 10px !important;
-        box-shadow: 0 4px 20px rgba(0, 255, 156, 0.3) !important;
-    }
-    
-    /* Alerts */
-    .stAlert {
-        background: rgba(0, 255, 156, 0.05) !important;
-        border: 1px solid rgba(0, 255, 156, 0.2) !important;
-        border-radius: 10px !important;
-    }
-    
-    /* Sidebar */
-    section[data-testid="stSidebar"] {
-        background: #0F1729 !important;
-        border-right: 1px solid rgba(0, 255, 156, 0.15) !important;
-    }
-    
-    section[data-testid="stSidebar"] h1,
-    section[data-testid="stSidebar"] h2,
-    section[data-testid="stSidebar"] h3 {
-        color: #00FF9C !important;
-    }
-    
-    /* Sidebar toggle */
-    [data-testid="stSidebarCollapsedControl"],
-    [data-testid="collapsedControl"] {
-        background: rgba(0, 255, 156, 0.2) !important;
-        border-radius: 8px !important;
-        position: fixed !important;
-        top: 12px !important;
-        left: 12px !important;
-        z-index: 9999999 !important;
-    }
-    
-    [data-testid="stSidebarCollapsedControl"] svg,
-    [data-testid="collapsedControl"] svg {
-        color: #00FF9C !important;
-        fill: #00FF9C !important;
-    }
-    
-    /* Confidence bar */
-    .confidence-bar {
-        background: rgba(255, 255, 255, 0.05) !important;
-        border-radius: 10px;
-        height: 20px;
-        overflow: hidden;
-        margin: 0.5rem 0;
-    }
-    
-    .confidence-fill {
-        background: linear-gradient(90deg, #00F5FF 0%, #00FF9C 100%);
-        height: 100%;
-        border-radius: 10px;
-        box-shadow: 0 0 10px rgba(0, 255, 156, 0.5);
-    }
-    
-    .pick-stat {
-        display: flex;
-        justify-content: space-between;
-        padding: 0.5rem 0;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-        color: #D1D5DB;
-    }
-    
-    .stat-label {
-        color: #6B7280;
-        font-weight: 600;
-    }
-    
-    .stat-value {
-        color: #00F5FF;
-        font-weight: 700;
-    }
-    
-    .ai-analysis {
-        background: rgba(0, 255, 156, 0.05);
-        border-left: 3px solid #00FF9C;
-        padding: 0.8rem 1rem;
-        margin: 1rem 0;
-        border-radius: 8px;
-        font-style: italic;
-        color: #E8ECFF;
-    }
-    
-    .forecast-card {
-        background: linear-gradient(135deg, rgba(255, 184, 0, 0.05) 0%, rgba(255, 51, 102, 0.05) 100%);
-        border: 1px solid rgba(255, 184, 0, 0.3);
-        border-radius: 20px;
-        padding: 1.5rem;
-        text-align: center;
-        margin-bottom: 1.5rem;
-    }
-    
-    .forecast-value {
-        font-size: 2.5rem;
-        font-weight: 900;
-        color: #FFB800;
-        text-shadow: 0 0 20px rgba(255, 184, 0, 0.4);
-    }
-    
-    .warning-card {
-        background: rgba(255, 51, 102, 0.15);
-        border: 2px solid #FF3366;
-        border-radius: 16px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    
-    .pick-title {
-        font-size: 1.3rem;
-        font-weight: 900;
-        color: #00F5FF;
-        margin-bottom: 0.5rem;
-    }
-    
-    .pick-time {
-        color: #6B7280;
-        font-size: 0.9rem;
-        font-weight: 600;
-        margin-bottom: 1rem;
-    }
-    
-    .pick-prediction {
-        font-size: 1.8rem;
-        font-weight: 900;
-        color: #00FF9C;
-        margin: 1rem 0;
-        text-shadow: 0 0 15px rgba(0, 255, 156, 0.4);
-    }
-    
-    /* Roadmap-specific styles */
-    .roadmap-phase {
-        background: linear-gradient(135deg, rgba(0, 255, 156, 0.02) 0%, rgba(0, 245, 255, 0.02) 100%);
-        border: 1px solid rgba(0, 255, 156, 0.2);
-        border-radius: 16px;
-        padding: 1.2rem;
-        margin-bottom: 1rem;
-    }
-    
-    .roadmap-done { border-left: 4px solid #00FF9C; }
-    .roadmap-progress { border-left: 4px solid #FFB800; }
-    .roadmap-future { border-left: 4px solid #6B7280; opacity: 0.7; }
-    
-    .roadmap-title {
-        font-size: 1.1rem;
-        font-weight: 900;
-        color: #00F5FF;
-        margin-bottom: 0.3rem;
-    }
-    
-    .roadmap-status {
-        display: inline-block;
-        padding: 0.2rem 0.6rem;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        font-weight: 900;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-bottom: 0.5rem;
-    }
-    
-    .status-done { background: rgba(0, 255, 156, 0.2); color: #00FF9C; }
-    .status-progress { background: rgba(255, 184, 0, 0.2); color: #FFB800; }
-    .status-future { background: rgba(107, 114, 128, 0.2); color: #9CA3AF; }
-    
-    .roadmap-features { margin-top: 0.5rem; color: #D1D5DB; }
-    .roadmap-features li { margin: 0.3rem 0; }
-    
-    .stButton button {
-        background: linear-gradient(135deg, #00F5FF 0%, #B537FF 100%) !important;
-        color: #0A0E27;
-        border: none;
-        border-radius: 12px;
-        font-weight: 900;
-        letter-spacing: 1px;
-        padding: 0.6rem 1.5rem;
-        box-shadow: 0 0 15px rgba(0, 245, 255, 0.4);
-    }
-    
-    .stButton button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 0 25px rgba(0, 245, 255, 0.6);
-    }
-    
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+.block-container { padding-top: 1.6rem; padding-bottom: 2rem; }
+[data-testid="stMetricValue"] { font-size: 1.8rem; }
+.small-muted { color: #94A3B8; font-size: 0.92rem; }
+.card {
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 16px;
+    padding: 1rem 1.15rem;
+    background: rgba(15, 23, 42, 0.48);
+}
+.good { color: #22C55E; font-weight: 700; }
+.warn { color: #F59E0B; font-weight: 700; }
+.bad { color: #EF4444; font-weight: 700; }
+.pick-card {
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 18px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.8rem;
+    background: linear-gradient(135deg, rgba(15, 23, 42, 0.78), rgba(30, 41, 59, 0.42));
+}
+.pick-title { font-size: 1rem; font-weight: 800; margin-bottom: 0.25rem; }
+.pick-meta { color: #94A3B8; font-size: 0.85rem; margin-bottom: 0.55rem; }
+.hero {
+    border-radius: 26px;
+    padding: 2.0rem 1.4rem;
+    margin-bottom: 1rem;
+    border: 1px solid rgba(248, 250, 252, 0.10);
+    background: radial-gradient(circle at top left, rgba(249, 115, 22, 0.35), transparent 30%), linear-gradient(135deg, #07111f, #111827 48%, #1e293b);
+}
+.hero h1 { font-size: clamp(2rem, 6vw, 4.2rem); line-height: 1.0; margin-bottom: 0.45rem; }
+.hero p { color: #CBD5E1; font-size: 1.05rem; max-width: 760px; }
+.feature-card {
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 18px;
+    padding: 1rem;
+    min-height: 145px;
+    background: rgba(15, 23, 42, 0.55);
+}
+.feature-card h3 { margin-top: 0; margin-bottom: 0.35rem; }
+.badge-strong { color: #22C55E; font-weight: 900; }
+.badge-medium { color: #F59E0B; font-weight: 900; }
+.badge-watch { color: #38BDF8; font-weight: 900; }
+.badge-avoid { color: #EF4444; font-weight: 900; }
+.terminal-panel {
+    border: 1px solid rgba(34, 197, 94, 0.28);
+    border-radius: 22px;
+    padding: 1rem;
+    background: linear-gradient(135deg, rgba(2, 6, 23, 0.92), rgba(15, 23, 42, 0.75));
+    box-shadow: 0 0 25px rgba(34, 197, 94, 0.08);
+    margin-bottom: 0.8rem;
+}
+.green-card { border-left: 5px solid #22C55E; }
+.watch-card { border-left: 5px solid #F59E0B; }
+.nobet-card { border-left: 5px solid #EF4444; }
+.terminal-title { font-size: 1.1rem; font-weight: 900; }
+.terminal-value { font-size: 1.35rem; font-weight: 900; }
 </style>
-""", unsafe_allow_html=True)
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+@st.cache_data(show_spinner="Loading and preparing Setka data...")
+def load_app_context() -> dict:
+    matches, leaderboard = load_raw_data()
+    saved_results = load_daily_results()
+    extra_matches = official_results_to_match_history(saved_results)
+    if not extra_matches.empty:
+        matches = pd.concat([matches, extra_matches], ignore_index=True)
+        matches = matches.drop_duplicates(subset=["source_match_id"], keep="last")
+    context = build_context(matches, leaderboard)
+    context["extra_saved_result_matches"] = len(extra_matches)
+    return context
+
+
+ctx = load_app_context()
+matches = ctx["matches"]
+player_log = ctx["player_log"]
+player_stats = ctx["player_stats"]
+global_stats = ctx["global_stats"]
+
+players_by_elo = player_stats.sort_values(["elo", "matches"], ascending=[False, False])[
+    "player"
+].tolist()
+players_alpha = sorted(player_stats["player"].dropna().unique().tolist())
+MODEL_BUNDLE_PATH = Path("models/setka_ml_bundle.joblib")
+
+
+@st.cache_resource(show_spinner="Training ML models. This can take a few minutes on the full dataset...")
+def train_ml_cached(algorithm: str, max_training_rows: int | None):
+    return train_model_bundle(
+        matches,
+        algorithm=algorithm,
+        max_training_rows=max_training_rows,
+    )
+
+
+@st.cache_data(show_spinner="Running time-split backtest...")
+def run_backtest_cached(test_rows: int, first_set_line: float, total_points_line: float, sets_line: float):
+    raw_matches, raw_leaderboard = load_raw_data()
+    return run_holdout_backtest(
+        raw_matches,
+        raw_leaderboard,
+        test_rows=test_rows,
+        first_set_line=first_set_line,
+        total_points_line=total_points_line,
+        sets_line=sets_line,
+    )
 
 
 with st.sidebar:
-    st.markdown("## 🔮 ORACLEBET")
-    st.caption("The Future of Predictions")
+    st.title("🏓 Setka Predictor")
+    st.caption("Prediction dashboard from uploaded Setka match history + Elo leaderboard.")
     st.divider()
-    
-    st.markdown(f"**Current Page:**")
-    st.markdown(f"### {st.session_state.current_page}")
+
+    page = st.radio(
+        "Go to",
+        [
+            "Home",
+            "Setka Trading Desk",
+            "Live Predictions",
+            "Live Match Center",
+            "Owner Edge Engine",
+            "Strong Pick Tracker",
+            "Bankroll Journal",
+            "Results Checker",
+            "Match Predictor",
+            "Model Intelligence",
+            "Accuracy Lab",
+            "Smart Stake Calc",
+            "Bet Slip Tools",
+            "ML Lab",
+            "Live Odds",
+            "Data Sources",
+            "Leaderboard",
+            "Player Explorer",
+            "Head-to-Head",
+            "Data Health",
+        ],
+    )
+
     st.divider()
-    if IMPORTS_OK:
-        state = load_bankroll_state()
-        with st.expander("⚙️ Settings", expanded=False):
-            new_bankroll = st.number_input("Bankroll (₦)", 1000, 10000000, int(state["current_bankroll"]), 1000)
-            new_daily_limit = st.slider("Daily Loss Limit (%)", 5, 25, int(state["daily_loss_limit_pct"]))
-            new_kelly = st.slider("Kelly Fraction", 0.10, 1.00, float(state["kelly_fraction"]), 0.05)
-            new_min_conf = st.slider("Min Confidence (%)", 55, 80, int(state["min_confidence"] * 100))
-            if st.button("💾 Save Settings"):
-                state["current_bankroll"] = new_bankroll
-                state["daily_loss_limit_pct"] = new_daily_limit
-                state["kelly_fraction"] = new_kelly
-                state["min_confidence"] = new_min_conf / 100
-                save_bankroll_state(state)
-                st.success("✅ Saved!")
-                st.rerun()
-    st.divider()
-    st.caption("💎 155K+ matches")
-    st.caption("🤖 XGBoost ML")
+    st.metric("Matches", f"{global_stats['match_count']:,}")
+    st.metric("Players", f"{global_stats['player_count']:,}")
+    st.caption(
+        f"Date range: {global_stats['date_min'].date()} → {global_stats['date_max'].date()}"
+    )
+    st.caption(
+        "Rule model: Elo + form + H2H. ML Lab: scikit-learn/XGBoost training."
+    )
+    if ctx.get("extra_saved_result_matches", 0):
+        st.caption(f"Saved official results added to model context: {ctx['extra_saved_result_matches']:,}")
 
 
-if not IMPORTS_OK:
-    st.error(f"⚠️ Import Error: {IMPORT_ERROR}")
-    st.stop()
+def probability_bar(pred: dict) -> go.Figure:
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                y=[pred["player_a"], pred["player_b"]],
+                x=[pred["player_a_win_probability"], pred["player_b_win_probability"]],
+                orientation="h",
+                marker_color=["#22C55E", "#F97316"],
+                text=[
+                    format_percent(pred["player_a_win_probability"]),
+                    format_percent(pred["player_b_win_probability"]),
+                ],
+                textposition="auto",
+                hovertemplate="%{y}: %{x:.1%}<extra></extra>",
+            )
+        ]
+    )
+    fig.update_layout(
+        title="Win probability",
+        xaxis=dict(range=[0, 1], tickformat=".0%"),
+        yaxis=dict(autorange="reversed"),
+        height=260,
+        margin=dict(l=10, r=10, t=50, b=10),
+    )
+    return fig
 
 
-# ===== TOP NAVIGATION - FIXED =====
-if 'current_page' not in st.session_state:
-    st.session_state.current_page = "🏠 Home"
-
-def switch_page(page_name):
-    st.session_state.current_page = page_name
-
-# Brand header
-st.markdown("""
-<div class="nav-wrapper">
-    <div class="brand-area">
-        <div class="brand-logo">🔮 ORACLEBET</div>
-        <div class="brand-tagline">The Future of Predictions</div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-# Navigation buttons - USING CALLBACKS (this fixes the click issue)
-nav_pages = [
-    ("🏠", "Home", "🏠 Home"),
-    ("🎯", "Picks", "🎯 All Picks"),
-    ("📡", "Live", "📡 Live"),
-    ("🧠", "Analyze", "🧠 Analyze"),
-    ("📈", "Record", "📈 Track Record"),
-    ("🛡️", "Vault", "🛡️ Vault"),
-    ("📊", "Edge", "📊 Edge"),
-    ("🗺️", "Map", "🗺️ Roadmap"),
-]
-
-# Split into 2 rows of 4 for better mobile layout
-row1_cols = st.columns(4)
-row2_cols = st.columns(4)
-
-for i, (icon, label, page_name) in enumerate(nav_pages[:4]):
-    with row1_cols[i]:
-        is_active = st.session_state.current_page == page_name
-        if is_active:
-            st.markdown('<div class="active-nav-btn">', unsafe_allow_html=True)
-        
-        button_label = f"{icon}\n{label}"
-        st.button(button_label, key=f"nav_{label}", use_container_width=True, on_click=switch_page, args=(page_name,))
-        
-        if is_active:
-            st.markdown('</div>', unsafe_allow_html=True)
-
-for i, (icon, label, page_name) in enumerate(nav_pages[4:]):
-    with row2_cols[i]:
-        is_active = st.session_state.current_page == page_name
-        if is_active:
-            st.markdown('<div class="active-nav-btn">', unsafe_allow_html=True)
-        
-        button_label = f"{icon}\n{label}"
-        st.button(button_label, key=f"nav_{label}_{i}", use_container_width=True, on_click=switch_page, args=(page_name,))
-        
-        if is_active:
-            st.markdown('</div>', unsafe_allow_html=True)
-
-st.markdown("---")
-
-# Set page variable from session state (THIS is what the rest of the app uses)
-page = st.session_state.current_page
+def over_under_bar(label: str, over_prob: float, under_prob: float) -> go.Figure:
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=["Over", "Under"],
+                y=[over_prob, under_prob],
+                marker_color=["#38BDF8", "#A78BFA"],
+                text=[format_percent(over_prob), format_percent(under_prob)],
+                textposition="auto",
+                hovertemplate="%{x}: %{y:.1%}<extra></extra>",
+            )
+        ]
+    )
+    fig.update_layout(
+        title=label,
+        yaxis=dict(range=[0, 1], tickformat=".0%"),
+        height=260,
+        margin=dict(l=10, r=10, t=50, b=10),
+    )
+    return fig
 
 
-MODEL_PATH = Path("models/setka_ml_bundle.joblib")
-
-
-@st.cache_resource(show_spinner="🔮 Loading Oracle...")
-def get_model_bundle():
-    if MODEL_PATH.exists():
-        try:
-            return load_model_bundle(MODEL_PATH), None
-        except Exception as exc:
-            return None, str(exc)
-    return None, "No trained model found."
-
-
-@st.cache_data(ttl=60, show_spinner="⚡ Fetching matches...")
-def get_upcoming_matches():
-    try:
-        locs = location_map()
-        frame = fetch_nearest_matches()
-        frame = add_lagos_time(frame)
-        frame = add_location_names(frame, locs)
-        return frame, None
-    except Exception as exc:
-        return pd.DataFrame(), str(exc)
-
-
-@st.cache_data(ttl=15, show_spinner="📡 Live matches...")
-def get_live_matches():
-    try:
-        locs = location_map()
-        frame = fetch_live_matches()
-        frame = add_lagos_time(frame)
-        frame = add_location_names(frame, locs)
-        return frame, None
-    except Exception as exc:
-        return pd.DataFrame(), str(exc)
-
-
-def generate_ai_reasoning(pred, player_a, player_b):
-    features = pred.get("features", {})
-    reasons = []
-    win_streak_a = features.get("a_win_streak", 0)
-    win_streak_b = features.get("b_win_streak", 0)
-    if win_streak_a >= 3:
-        reasons.append(f"🔥 {player_a} on {int(win_streak_a)}-win streak")
-    if win_streak_b >= 3:
-        reasons.append(f"🔥 {player_b} on {int(win_streak_b)}-win streak")
-    hours_a = features.get("a_hours_since_last", 168)
-    hours_b = features.get("b_hours_since_last", 168)
-    if hours_a < 2:
-        reasons.append(f"😴 {player_a} may be tired ({hours_a:.1f}h ago)")
-    if hours_b < 2:
-        reasons.append(f"😴 {player_b} may be tired ({hours_b:.1f}h ago)")
-    elo_diff = features.get("elo_diff", 0)
-    if abs(elo_diff) > 100:
-        stronger = player_a if elo_diff > 0 else player_b
-        reasons.append(f"💪 {stronger} +{abs(elo_diff):.0f} Elo advantage")
-    h2h = features.get("h2h_matches", 0)
-    h2h_rate = features.get("h2h_a_win_rate", 0.5)
-    if h2h >= 3:
-        if h2h_rate > 0.65:
-            reasons.append(f"⚔️ {player_a} owns H2H ({h2h_rate*100:.0f}% of {int(h2h)})")
-        elif h2h_rate < 0.35:
-            reasons.append(f"⚔️ {player_b} owns H2H ({(1-h2h_rate)*100:.0f}% of {int(h2h)})")
-    matches_today_a = features.get("a_matches_today", 0)
-    matches_today_b = features.get("b_matches_today", 0)
-    if matches_today_a >= 4:
-        reasons.append(f"⚠️ {player_a} played {int(matches_today_a)} today")
-    if matches_today_b >= 4:
-        reasons.append(f"⚠️ {player_b} played {int(matches_today_b)} today")
-    if not reasons:
-        reasons.append("📊 Based on 155K+ matches analysis")
-    return " • ".join(reasons[:3])
-
-
-# ============================================
-# HOME PAGE
-# ============================================
-if page == "🏠 Home":
-    state = load_bankroll_state()
-    current_bankroll = state["current_bankroll"]
-    starting_bankroll = state["starting_bankroll"]
-    
-    hour = datetime.now().hour
-    greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 18 else "Good evening"
-    
-    st.markdown("# 🔮 ORACLEBET")
-    st.markdown(f"### {greeting}, Champion 👑")
-    
-    limit_check = check_loss_limit(state)
-    if limit_check["exceeded"]:
-        st.markdown(f"""
-        <div class="warning-card">
-            🛑 <strong>DAILY LOSS LIMIT REACHED</strong><br>
-            Lost {format_currency(abs(limit_check['loss']))} today (limit: {format_currency(abs(limit_check['limit']))})<br>
-            <em>Take a break. Come back tomorrow.</em>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.markdown("")
-    
-    stats = calculate_stats(state)
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    today_pnl = calculate_daily_pnl(state, today_str)
-    total_pnl = current_bankroll - starting_bankroll
-    total_pnl_pct = (total_pnl / starting_bankroll * 100) if starting_bankroll > 0 else 0
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Bankroll", format_currency(current_bankroll), format_currency(total_pnl) if total_pnl != 0 else None)
-    with col2:
-        st.metric("Win Rate", f"{stats['win_rate']:.0f}%", f"{stats['settled_bets']} bets")
-    with col3:
-        st.metric("Total ROI", f"{total_pnl_pct:+.1f}%", format_currency(today_pnl) if today_pnl != 0 else "Today: ₦0")
-    with col4:
-        st.metric("Pending", str(stats['pending_bets']), "🔥" if stats['pending_bets'] > 0 else "None")
-    
-    st.markdown("---")
-    
-    bundle, model_error = get_model_bundle()
-    matches, match_error = get_upcoming_matches()
-    
-    if model_error:
-        st.warning(f"⚠️ {model_error}")
-        st.stop()
-    
-    if match_error:
-        st.warning(f"⚠️ {match_error}")
-    
-    predictions = []
-    if not matches.empty and bundle:
-        for _, match in matches.head(30).iterrows():
-            try:
-                pred = predict_with_bundle(bundle, match["player1"], match["player2"], current_dt=pd.Timestamp.now())
-                confidence = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
-                if confidence >= state["min_confidence"]:
-                    predictions.append({
-                        "match": f"{match['player1']} vs {match['player2']}",
-                        "player1": match["player1"],
-                        "player2": match["player2"],
-                        "time": match.get("start_time_lagos", "TBD"),
-                        "location": match.get("location", "Setka Cup"),
-                        "winner": pred["predicted_winner"],
-                        "confidence": confidence,
-                        "prediction": pred,
-                    })
-            except Exception:
-                continue
-    
-    predictions.sort(key=lambda x: x["confidence"], reverse=True)
-    top_picks = predictions[:5]
-    
-    forecast_label = "HIGH ✨" if len(top_picks) >= 3 else "MEDIUM" if len(top_picks) >= 1 else "LOW 🌧️"
-    st.markdown(f"""
-    <div class="forecast-card">
-        <div style="color: #FFB800; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 2px; font-weight: 700;">☀️ Oracle Forecast</div>
-        <div class="forecast-value">{len(top_picks)} STRONG PICKS</div>
-        <div style="color: #E8ECFF; margin-top: 0.5rem;">Confidence: {forecast_label}</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    if not top_picks:
-        st.info("🌙 No high-confidence picks now. Check back later!")
-        st.stop()
-    
-    st.markdown("### ⭐ TOP PICK")
-    top = top_picks[0]
-    fair_odds = fair_odds_from_probability(top["confidence"])
-    assumed_market_odds = fair_odds * 0.95
-    kelly_result = kelly_stake(current_bankroll, top["confidence"], assumed_market_odds, state["kelly_fraction"], state["min_stake"], state["max_stake_pct"])
-    suggested_stake = kelly_result["stake"]
-    potential_win = suggested_stake * assumed_market_odds if suggested_stake > 0 else 0
-    ai_reason = generate_ai_reasoning(top["prediction"], top["player1"], top["player2"])
-    confidence_pct = top["confidence"] * 100
-    
-    st.markdown(f"""
-    <div class="pick-card pick-card-top">
-        <div class="pick-title">🏓 {top["match"]}</div>
-        <div class="pick-time">⏰ {top["time"]} • {top["location"]}</div>
-        <div class="pick-prediction">🎯 {top["winner"]} WINS</div>
-        <div class="confidence-bar"><div class="confidence-fill" style="width: {confidence_pct}%"></div></div>
-        <div style="text-align: center; color: #00FF9C; font-weight: 700; margin-bottom: 1rem;">{confidence_pct:.1f}% confidence</div>
-        <div class="pick-stat"><span class="stat-label">💎 Fair Odds</span><span class="stat-value">{fair_odds:.2f}</span></div>
-        <div class="pick-stat"><span class="stat-label">🎰 Est. SportyBet</span><span class="stat-value">{assumed_market_odds:.2f}</span></div>
-        <div class="pick-stat"><span class="stat-label">💰 Kelly Stake</span><span class="stat-value">{format_currency(suggested_stake)}</span></div>
-        <div class="pick-stat"><span class="stat-label">📊 Potential Win</span><span class="stat-value">{format_currency(potential_win)}</span></div>
-        <div class="pick-stat"><span class="stat-label">🎯 Edge</span><span class="stat-value">{kelly_result['kelly_pct']}%</span></div>
-        <div class="ai-analysis">🧠 <strong>AI:</strong> {ai_reason}</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    if suggested_stake > 0:
-        if st.button(f"📝 Track This Bet ({format_currency(suggested_stake)})", key="track_top"):
-            add_bet(state, {
-                "match": top["match"],
-                "player1": top["player1"],
-                "player2": top["player2"],
-                "prediction": top["winner"],
-                "confidence": top["confidence"],
-                "stake": suggested_stake,
-                "odds": assumed_market_odds,
-                "market": "match_winner",
-            })
-            st.success("✅ Tracked in Vault!")
-            st.rerun()
-    
-    if len(top_picks) > 1:
-        st.markdown(f"### 📋 More Picks ({len(top_picks) - 1})")
-        for i, pick in enumerate(top_picks[1:]):
-            conf_pct = pick["confidence"] * 100
-            odds = fair_odds_from_probability(pick["confidence"])
-            market_odds = odds * 0.95
-            kelly = kelly_stake(current_bankroll, pick["confidence"], market_odds, state["kelly_fraction"], state["min_stake"], state["max_stake_pct"])
-            reason = generate_ai_reasoning(pick["prediction"], pick["player1"], pick["player2"])
-            
-            st.markdown(f"""
-            <div class="pick-card">
-                <div class="pick-title">🏓 {pick["match"]}</div>
-                <div class="pick-time">⏰ {pick["time"]} • {pick["location"]}</div>
-                <div class="pick-prediction" style="font-size: 1.4rem;">🎯 {pick["winner"]} ({conf_pct:.1f}%)</div>
-                <div class="confidence-bar"><div class="confidence-fill" style="width: {conf_pct}%"></div></div>
-                <div class="pick-stat"><span class="stat-label">Odds / Stake</span><span class="stat-value">{market_odds:.2f} / {format_currency(kelly['stake'])}</span></div>
-                <div class="ai-analysis" style="font-size: 0.85rem;">🧠 {reason}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            if kelly['stake'] > 0:
-                if st.button(f"📝 Track ({format_currency(kelly['stake'])})", key=f"track_more_{i}"):
-                    add_bet(state, {
-                        "match": pick["match"],
-                        "player1": pick["player1"],
-                        "player2": pick["player2"],
-                        "prediction": pick["winner"],
-                        "confidence": pick["confidence"],
-                        "stake": kelly['stake'],
-                        "odds": market_odds,
-                        "market": "match_winner",
-                    })
-                    st.success("✅ Tracked!")
-                    st.rerun()
-
-
-
-# ============================================
-# LIVE PAGE (UPGRADED)
-# ============================================
-elif page == "📡 Live":
-    st.markdown("# 📡 LIVE MATCHES")
-    st.caption("Real-time Setka Cup matches with live scores")
-    
-    # Auto-refresh option
-    refresh_col1, refresh_col2 = st.columns([3, 1])
-    with refresh_col2:
-        auto_refresh = st.checkbox("🔄 Auto-refresh (15s)", value=False)
-    
-    if auto_refresh:
-        st.markdown("""
-        <meta http-equiv="refresh" content="15">
-        """, unsafe_allow_html=True)
-    
-    live_matches, live_error = get_live_matches()
-    
-    if live_error:
-        st.warning(f"⚠️ {live_error}")
-    
-    if live_matches.empty:
-        st.info("😴 No live matches right now. Check during peak Setka Cup hours (usually 24/7 but varies).")
-        st.markdown("""
-        <div class="pick-card">
-            <div class="pick-title">💡 About Live Matches</div>
-            <div style="color: #E8ECFF;">
-                Live matches appear here when players are actively competing.<br>
-                We show:<br>
-                • Current score (sets and points)<br>
-                • Live probability updates<br>
-                • AI recommendations<br>
-                • Set-by-set breakdown
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.success(f"🔴 {len(live_matches)} matches LIVE right now")
-        
-        bundle, _ = get_model_bundle()
-        
-        for idx, match in live_matches.iterrows():
-            p1 = match.get("player1", "?")
-            p2 = match.get("player2", "?")
-            score = match.get("score", "0:0")
-            set_scores = match.get("set_scores", "")
-            location = match.get("location", "Setka Cup")
-            
-            # Parse current score
-            try:
-                p1_sets, p2_sets = score.split(":") if ":" in str(score) else ("0", "0")
-                p1_sets = int(p1_sets.strip())
-                p2_sets = int(p2_sets.strip())
-            except:
-                p1_sets, p2_sets = 0, 0
-            
-            # Determine leader
-            if p1_sets > p2_sets:
-                leader = p1
-                lead_color = "#00FF9C"
-            elif p2_sets > p1_sets:
-                leader = p2
-                lead_color = "#00FF9C"
-            else:
-                leader = "Tied"
-                lead_color = "#FFB800"
-            
-            st.markdown(f"""
-            <div class="pick-card" style="border-left: 4px solid #FF3366;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                    <div class="pick-title">🔴 LIVE</div>
-                    <div style="color: #FF3366; font-weight: 900; font-size: 0.85rem;">● BROADCASTING</div>
-                </div>
-                <div style="font-size: 1.2rem; font-weight: 700; color: #E8ECFF; margin-bottom: 0.5rem;">
-                    {p1} vs {p2}
-                </div>
-                <div class="pick-time">📍 {location}</div>
-                
-                <div style="background: rgba(0, 245, 255, 0.1); padding: 1rem; border-radius: 12px; margin: 1rem 0; text-align: center;">
-                    <div style="color: #B537FF; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 2px; font-weight: 700;">Current Score</div>
-                    <div style="font-size: 2.5rem; font-weight: 900; color: #00F5FF; margin: 0.5rem 0;">
-                        {p1_sets} : {p2_sets}
-                    </div>
-                    <div style="color: {lead_color}; font-weight: 700;">
-                        {'🏆 ' + leader + ' leads' if leader != 'Tied' else '⚖️ Tied'}
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
-            
-            # Show set-by-set if available
-            if set_scores:
-                st.markdown(f"""
-                <div style="background: rgba(255, 255, 255, 0.05); padding: 0.8rem; border-radius: 10px; margin: 0.5rem 0;">
-                    <div style="color: #B537FF; font-size: 0.8rem; font-weight: 700; text-transform: uppercase;">Set-by-Set</div>
-                    <div style="color: #E8ECFF; font-family: monospace; font-size: 1rem; margin-top: 0.3rem;">{set_scores}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # AI Live Prediction
-            if bundle:
-                try:
-                    pred = predict_with_bundle(bundle, p1, p2)
-                    conf = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
-                    predicted_winner = pred["predicted_winner"]
-                    
-                    # Adjust based on current score (basic)
-                    if p1_sets > p2_sets and predicted_winner == p1:
-                        confidence_note = "✅ Prediction on track"
-                    elif p2_sets > p1_sets and predicted_winner == p2:
-                        confidence_note = "✅ Prediction on track"
-                    elif p1_sets == p2_sets:
-                        confidence_note = "⏳ Match too early to tell"
-                    else:
-                        confidence_note = "⚠️ Underdog leading - upset possible"
-                    
-                    st.markdown(f"""
-                    <div style="background: rgba(181, 55, 255, 0.1); padding: 0.8rem; border-radius: 10px; margin: 0.5rem 0;">
-                        <div style="color: #B537FF; font-size: 0.8rem; font-weight: 700; text-transform: uppercase;">🧠 AI Prediction</div>
-                        <div style="color: #00FF9C; font-weight: 700; font-size: 1.1rem; margin: 0.3rem 0;">
-                            {predicted_winner} to win ({conf*100:.1f}%)
-                        </div>
-                        <div style="color: #E8ECFF; font-size: 0.9rem;">{confidence_note}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                except Exception:
-                    pass
-            
-            st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ============================================
-# ANALYZE PAGE
-# ============================================
-elif page == "🧠 Analyze":
-    st.markdown("# 🧠 DEEP ANALYZE")
-    st.caption("Analyze any matchup")
-    
-    bundle, model_error = get_model_bundle()
-    
-    if model_error:
-        st.warning(f"⚠️ {model_error}")
-        st.stop()
-    
-    try:
-        raw_matches, _ = load_raw_data()
-        players = sorted(set(raw_matches["player1"].dropna().unique()) | set(raw_matches["player2"].dropna().unique()))
-    except Exception:
-        players = []
-    
-    if not players:
-        st.error("Could not load players")
-        st.stop()
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        player_a = st.selectbox("Player A", players, key="pa")
-    with col2:
-        player_b = st.selectbox("Player B", players, index=1 if len(players) > 1 else 0, key="pb")
-    
-    if player_a == player_b:
-        st.warning("Select two different players")
-        st.stop()
-    
-    if st.button("🔮 ANALYZE"):
-        try:
-            pred = predict_with_bundle(bundle, player_a, player_b)
-            conf = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
-            reason = generate_ai_reasoning(pred, player_a, player_b)
-            fair = fair_odds_from_probability(conf)
-            
-            st.markdown(f"""
-            <div class="pick-card pick-card-top">
-                <div class="pick-title">🏓 {player_a} vs {player_b}</div>
-                <div class="pick-prediction">🎯 {pred['predicted_winner']} WINS</div>
-                <div class="confidence-bar"><div class="confidence-fill" style="width: {conf*100}%"></div></div>
-                <div style="text-align: center; color: #00FF9C; font-weight: 700; margin-bottom: 1rem;">{conf*100:.1f}% confidence</div>
-                <div class="pick-stat"><span class="stat-label">Fair Odds</span><span class="stat-value">{fair:.2f}</span></div>
-                <div class="ai-analysis">🧠 <strong>Analysis:</strong> {reason}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            features = pred.get("features", {})
-            st.markdown("### 📊 Detailed Metrics")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.metric(f"{player_a} Elo", f"{features.get('a_elo', 0):.0f}")
-                st.metric(f"{player_a} Form", f"{features.get('a_weighted_recent_form', 0)*100:.0f}%")
-                st.metric(f"{player_a} Streak", f"{int(features.get('a_win_streak', 0))}")
-            with c2:
-                st.metric(f"{player_b} Elo", f"{features.get('b_elo', 0):.0f}")
-                st.metric(f"{player_b} Form", f"{features.get('b_weighted_recent_form', 0)*100:.0f}%")
-                st.metric(f"{player_b} Streak", f"{int(features.get('b_win_streak', 0))}")
-            
-            st.markdown("### 🔍 H2H History")
-            h2h_matches = features.get("h2h_matches", 0)
-            h2h_a_rate = features.get("h2h_a_win_rate", 0.5)
-            
-            if h2h_matches > 0:
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    st.metric("H2H Matches", f"{int(h2h_matches)}")
-                with c2:
-                    st.metric(f"{player_a} Wins", f"{h2h_a_rate*100:.0f}%")
-                with c3:
-                    st.metric(f"{player_b} Wins", f"{(1-h2h_a_rate)*100:.0f}%")
-            else:
-                st.info("No head-to-head history between these players")
-        except Exception as exc:
-            st.error(f"Analysis failed: {exc}")
-
-
-# ============================================
-# VAULT PAGE
-# ============================================
-elif page == "🛡️ Vault":
-    st.markdown("# 🛡️ BANKROLL VAULT")
-    st.caption("Track your paper trading performance")
-    
-    state = load_bankroll_state()
-    stats = calculate_stats(state)
-    
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Bankroll", format_currency(state["current_bankroll"]))
-        st.metric("Starting", format_currency(state["starting_bankroll"]))
-    with c2:
-        st.metric("Total Profit", format_currency(stats["total_profit"]))
-        st.metric("Total Staked", format_currency(stats["total_staked"]))
-    with c3:
-        st.metric("Win Rate", f"{stats['win_rate']:.1f}%")
-        st.metric("ROI", f"{stats['roi']:+.1f}%")
-    
-    st.markdown("---")
-    
-    # Streak info
-    streak = state.get("streak", {"current": 0, "type": "none"})
-    if streak.get("type") != "none":
-        emoji = "🔥" if streak["type"] == "win" else "❄️"
-        st.markdown(f"### {emoji} Current Streak: {streak['current']} {streak['type']}s")
-    
-    st.markdown("### 📋 Bet Journal")
-    
-    if not state["bets"]:
-        st.info("💡 No bets tracked yet. Go to Home page and tap 'Track This Bet' on picks.")
-    else:
-        pending = [b for b in state["bets"] if b["status"] == "pending"]
-        if pending:
-            st.markdown(f"#### ⏳ Pending Bets ({len(pending)})")
-            for bet in reversed(pending):
-                col1, col2, col3 = st.columns([3, 1, 1])
-                with col1:
-                    st.markdown(f"**{bet['match']}** → {bet['prediction']}")
-                    st.caption(f"Stake: {format_currency(bet['stake'])} @ {bet['odds']:.2f} | Confidence: {bet['confidence']*100:.1f}%")
-                with col2:
-                    if st.button("✅ Won", key=f"win_{bet['id']}"):
-                        settle_bet(state, bet["id"], True)
-                        st.success("Bet settled as WIN!")
-                        st.rerun()
-                with col3:
-                    if st.button("❌ Lost", key=f"lose_{bet['id']}"):
-                        settle_bet(state, bet["id"], False)
-                        st.error("Bet settled as LOSS")
-                        st.rerun()
-        
-        settled = [b for b in state["bets"] if b["status"] == "settled"]
-        if settled:
-            st.markdown(f"#### 📜 History ({len(settled)} settled)")
-            
-            # Recent history table
-            for bet in reversed(settled[-20:]):
-                emoji = "✅" if bet.get("won") else "❌"
-                pnl = bet.get("profit_loss", 0)
-                color = "#00FF9C" if pnl > 0 else "#FF3366"
-                date = bet["timestamp"][:10]
-                st.markdown(f"""
-                <div style="padding: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.05);">
-                    {emoji} <strong>{bet['match']}</strong> → {bet['prediction']}<br>
-                    <span style="color: #B537FF; font-size: 0.85rem;">{date} • Stake: {format_currency(bet.get('stake', 0))} @ {bet.get('odds', 0):.2f}</span> 
-                    <span style="color:{color}; float: right; font-weight: 900;">{format_currency(pnl)}</span>
-                </div>
-                """, unsafe_allow_html=True)
-        
-        # Reset option
-        st.markdown("---")
-        with st.expander("⚠️ Danger Zone"):
-            st.warning("This will reset ALL bets and bankroll to starting values.")
-            if st.button("🗑️ Reset All Data"):
-                if state.get("bets"):
-                    state["bets"] = []
-                    state["current_bankroll"] = state["starting_bankroll"]
-                    state["streak"] = {"current": 0, "type": "none", "best_win": 0, "worst_loss": 0}
-                    save_bankroll_state(state)
-                    st.success("✅ Reset complete!")
-                    st.rerun()
-
-
-# ============================================
-# EDGE PAGE
-# ============================================
-elif page == "📊 Edge":
-    st.markdown("# 📊 STATISTICAL EDGE")
-    st.caption("Model transparency and performance")
-    
-    bundle, model_error = get_model_bundle()
-    
-    if model_error:
-        st.warning(f"⚠️ {model_error}")
-        st.stop()
-    
-    st.markdown("### 🤖 Model Info")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Algorithm", bundle.get("algorithm", "unknown").upper())
-    with c2:
-        st.metric("Train Rows", f"{bundle.get('train_rows', 0):,}")
-    with c3:
-        st.metric("Test Rows", f"{bundle.get('test_rows', 0):,}")
-    
-    st.markdown("### 📈 Performance Metrics")
-    metrics = bundle.get("metrics", [])
-    if metrics:
-        df = pd.DataFrame(metrics)
-        st.dataframe(df, use_container_width=True)
-        
-        # Highlight winner accuracy
-        for m in metrics:
-            if m.get("model") == "winner" and m.get("accuracy"):
-                acc_pct = m["accuracy"] * 100
-                roc = m.get("roc_auc", 0)
-                
-                if acc_pct >= 65:
-                    st.success(f"🎯 Winner Accuracy: {acc_pct:.1f}% (ROC-AUC: {roc:.3f}) - EXCELLENT")
-                elif acc_pct >= 60:
-                    st.info(f"🎯 Winner Accuracy: {acc_pct:.1f}% (ROC-AUC: {roc:.3f}) - GOOD")
-                else:
-                    st.warning(f"🎯 Winner Accuracy: {acc_pct:.1f}% (ROC-AUC: {roc:.3f}) - NEEDS IMPROVEMENT")
-    else:
-        st.info("No metrics available. Retrain the model to see metrics.")
-    
-    st.markdown("### 🎯 Features Being Used")
-    features_list = bundle.get("feature_columns", [])
-    if features_list:
-        st.write(f"**Total features:** {len(features_list)}")
-        
-        # Categorize features
-        categories = {
-            "Elo Ratings": [f for f in features_list if "elo" in f.lower()],
-            "Win Rates": [f for f in features_list if "win_rate" in f.lower() or "recent_form" in f.lower()],
-            "Fatigue": [f for f in features_list if "hours" in f.lower() or "matches_today" in f.lower()],
-            "Streaks": [f for f in features_list if "streak" in f.lower()],
-            "H2H": [f for f in features_list if "h2h" in f.lower()],
-            "Points/Sets": [f for f in features_list if "points" in f.lower() or "set" in f.lower()],
-        }
-        
-        for cat, feats in categories.items():
-            if feats:
-                with st.expander(f"{cat} ({len(feats)})"):
-                    for f in feats:
-                        st.text(f"• {f}")
-    
-    st.markdown("### 💡 About the Oracle")
-    st.markdown("""
-    <div class="pick-card">
-        <strong>🔮 How OracleBet Works:</strong><br><br>
-        • Analyzes <strong>155,000+ historical matches</strong><br>
-        • Uses <strong>XGBoost machine learning</strong> algorithm<br>
-        • Tracks <strong>60+ features</strong> per match<br>
-        • Updates <strong>Elo ratings dynamically</strong><br>
-        • Detects <strong>fatigue, streaks, and momentum</strong><br>
-        • Considers <strong>head-to-head history</strong><br>
-        • Calculates <strong>Kelly Criterion</strong> for optimal stakes<br>
-        • Only shows picks with your <strong>minimum confidence</strong> threshold<br><br>
-        <em>Remember: No model is perfect. Always paper trade first, bet responsibly, and never chase losses.</em>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-# ============================================
-# ALL PICKS PAGE
-# ============================================
-elif page == "🎯 All Picks":
-    st.markdown("# 🎯 ALL UPCOMING PICKS")
-    st.caption("Complete predictions across all markets")
-    
-    state = load_bankroll_state()
-    current_bankroll = state["current_bankroll"]
-    
-    bundle, model_error = get_model_bundle()
-    matches, match_error = get_upcoming_matches()
-    
-    if model_error:
-        st.warning(f"⚠️ ML Model: {model_error}")
-    
-    if match_error:
-        st.warning(f"⚠️ Matches: {match_error}")
-        st.stop()
-    
-    if matches.empty:
-        st.info("😴 No upcoming matches found. Check back during match hours.")
-        st.stop()
-    
-    # ===== FILTERS =====
-    st.markdown("### 🔍 Filters")
-    filter_col1, filter_col2, filter_col3 = st.columns(3)
-    
-    with filter_col1:
-        min_conf_filter = st.slider(
-            "Min Winner Confidence (%)",
-            min_value=50,
-            max_value=90,
-            value=int(state["min_confidence"] * 100),
-            step=5,
-        )
-    
-    with filter_col2:
-        market_filter = st.multiselect(
-            "Show Markets",
-            ["Winner", "Total Points", "First Set O/U", "Sets O/U"],
-            default=["Winner", "Total Points", "First Set O/U", "Sets O/U"],
-        )
-    
-    with filter_col3:
-        limit = st.selectbox(
-            "Max Matches to Show",
-            [10, 25, 50, 100, "All"],
-            index=1,
-        )
-    
-    st.markdown("---")
-    
-    # ===== IMPORT RULE-BASED PREDICTOR for extra markets =====
-    try:
-        from src.setka_core import predict_match, build_context
-        rule_ctx = build_context(load_raw_data()[0], load_raw_data()[1])
-        rule_available = True
-    except Exception as exc:
-        rule_available = False
-        st.warning(f"Rule model unavailable: {exc}")
-    
-    # ===== GENERATE ALL PREDICTIONS =====
-    all_predictions = []
-    max_matches = len(matches) if limit == "All" else int(limit)
-    
-    with st.spinner(f"🔮 Analyzing {min(max_matches, len(matches))} matches..."):
-        for _, match in matches.head(max_matches).iterrows():
-            try:
-                p1 = match["player1"]
-                p2 = match["player2"]
-                
-                # ML prediction (Winner)
-                ml_pred = None
-                if bundle:
-                    try:
-                        ml_pred = predict_with_bundle(bundle, p1, p2, current_dt=pd.Timestamp.now())
-                    except Exception:
-                        pass
-                
-                # Rule-based prediction (for Total Points, First Set, Sets)
-                rule_pred = None
-                if rule_available:
-                    try:
-                        rule_pred = predict_match(
-                            p1, p2,
-                            rule_ctx["player_stats"],
-                            rule_ctx["matches"],
-                            rule_ctx["global_stats"],
-                            first_set_line=18.5,
-                            total_points_line=75.5,
-                            sets_line=3.5,
-                        )
-                    except Exception:
-                        pass
-                
-                # Combine predictions
-                if not ml_pred and not rule_pred:
-                    continue
-                
-                # Winner (use ML if available, else rule)
-                if ml_pred:
-                    winner_prob = max(ml_pred["player_a_win_probability"], ml_pred["player_b_win_probability"])
-                    predicted_winner = ml_pred["predicted_winner"]
-                else:
-                    winner_prob = max(rule_pred["player_a_win_probability"], rule_pred["player_b_win_probability"])
-                    predicted_winner = rule_pred["predicted_winner"]
-                
-                # Filter by min confidence
-                if winner_prob * 100 < min_conf_filter:
-                    continue
-                
-                pred_data = {
-                    "match": f"{p1} vs {p2}",
-                    "player1": p1,
-                    "player2": p2,
-                    "time": match.get("start_time_lagos", "TBD"),
-                    "date": match.get("start_date_lagos", ""),
-                    "location": match.get("location", "Setka Cup"),
-                    "winner_pred": predicted_winner,
-                    "winner_prob": winner_prob,
-                    "ml_pred": ml_pred,
-                    "rule_pred": rule_pred,
-                }
-                
-                # Add totals if rule model available
-                if rule_pred:
-                    total_over = rule_pred.get("total_points_over_probability", 0.5)
-                    total_under = rule_pred.get("total_points_under_probability", 0.5)
-                    pred_data["total_pick"] = "Over 75.5" if total_over > total_under else "Under 75.5"
-                    pred_data["total_prob"] = max(total_over, total_under)
-                    pred_data["expected_total"] = rule_pred.get("expected_total_points", 0)
-                    
-                    first_over = rule_pred.get("first_set_over_probability", 0.5)
-                    first_under = rule_pred.get("first_set_under_probability", 0.5)
-                    pred_data["first_pick"] = "Over 18.5" if first_over > first_under else "Under 18.5"
-                    pred_data["first_prob"] = max(first_over, first_under)
-                    pred_data["expected_first"] = rule_pred.get("expected_first_set_points", 0)
-                    
-                    sets_over = rule_pred.get("sets_over_probability", 0.5)
-                    sets_under = rule_pred.get("sets_under_probability", 0.5)
-                    pred_data["sets_pick"] = "Over 3.5" if sets_over > sets_under else "Under 3.5"
-                    pred_data["sets_prob"] = max(sets_over, sets_under)
-                    pred_data["expected_sets"] = rule_pred.get("expected_sets_played", 0)
-                
-                # Auto-log this prediction for tracking
-                add_prediction({
-                    "match_id": f"{p1}_vs_{p2}_{match.get('start_date_lagos', '')}_{match.get('start_time_lagos', '')}",
-                    "player1": p1,
-                    "player2": p2,
-                    "match_date": str(match.get("start_date_lagos", "")),
-                    "match_time": str(match.get("start_time_lagos", "")),
-                    "location": str(match.get("location", "")),
-                    "predicted_winner": predicted_winner,
-                    "confidence": winner_prob,
-                    "total_pick": pred_data.get("total_pick"),
-                    "total_prob": pred_data.get("total_prob"),
-                    "first_pick": pred_data.get("first_pick"),
-                    "first_prob": pred_data.get("first_prob"),
-                    "sets_pick": pred_data.get("sets_pick"),
-                    "sets_prob": pred_data.get("sets_prob"),
-                })
-
-                all_predictions.append(pred_data)
-                
-            except Exception:
-                continue
-    
-    # Sort by winner confidence
-    all_predictions.sort(key=lambda x: x["winner_prob"], reverse=True)
-    
-    if not all_predictions:
-        st.info(f"🌙 No matches meet the {min_conf_filter}% confidence threshold. Lower the filter to see more.")
-        st.stop()
-    
-    # ===== SUMMARY STATS =====
-    st.markdown(f"### 📊 Found {len(all_predictions)} Matches")
-    
-    summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
-    
-    winner_picks = [p for p in all_predictions if p["winner_prob"] >= 0.65]
-    with summary_col1:
-        st.metric("🎯 Strong Winners", len(winner_picks))
-    
-    total_picks = [p for p in all_predictions if p.get("total_prob", 0) >= 0.60]
-    with summary_col2:
-        st.metric("📊 Total Picks", len(total_picks))
-    
-    first_picks = [p for p in all_predictions if p.get("first_prob", 0) >= 0.60]
-    with summary_col3:
-        st.metric("⚡ 1st Set Picks", len(first_picks))
-    
-    sets_picks = [p for p in all_predictions if p.get("sets_prob", 0) >= 0.60]
-    with summary_col4:
-        st.metric("🎾 Sets Picks", len(sets_picks))
-    
-    st.markdown("---")
-    
-    # ===== DISPLAY ALL PICKS =====
-    st.markdown("### 🏓 All Matches with Predictions")
-    
-    for idx, pred in enumerate(all_predictions):
-        # Confidence color coding
-        conf_pct = pred["winner_prob"] * 100
-        if conf_pct >= 70:
-            border_color = "#00FF9C"
-            conf_emoji = "🔥"
-        elif conf_pct >= 60:
-            border_color = "#00F5FF"
-            conf_emoji = "⭐"
-        else:
-            border_color = "#FFB800"
-            conf_emoji = "⚠️"
-        
-        # Fair odds & Kelly for winner
-        fair_odds = fair_odds_from_probability(pred["winner_prob"])
-        market_odds = fair_odds * 0.95
-        kelly = kelly_stake(
-            current_bankroll,
-            pred["winner_prob"],
-            market_odds,
-            state["kelly_fraction"],
-            state["min_stake"],
-            state["max_stake_pct"],
-        )
-        
-        # Build the card HTML
-        card_html = f"""
-        <div class="pick-card" style="border-left: 4px solid {border_color};">
-            <div class="pick-title">{conf_emoji} {pred["match"]}</div>
-            <div class="pick-time">⏰ {pred["time"]} • {pred["location"]}</div>
-        """
-        
-        # Winner section (always show)
-        if "Winner" in market_filter:
-            card_html += f"""
-            <div style="background: rgba(0, 245, 255, 0.05); padding: 0.8rem; border-radius: 10px; margin: 0.5rem 0;">
-                <div style="color: #B537FF; font-size: 0.85rem; font-weight: 700; text-transform: uppercase;">🎯 Winner</div>
-                <div style="font-size: 1.3rem; font-weight: 900; color: #00FF9C; margin: 0.3rem 0;">{pred["winner_pred"]}</div>
-                <div class="confidence-bar"><div class="confidence-fill" style="width: {conf_pct}%"></div></div>
-                <div style="display: flex; justify-content: space-between; margin-top: 0.3rem; font-size: 0.85rem;">
-                    <span style="color: #E8ECFF;">Confidence: <strong style="color: #00F5FF;">{conf_pct:.1f}%</strong></span>
-                    <span style="color: #E8ECFF;">Odds: <strong style="color: #00F5FF;">{market_odds:.2f}</strong></span>
-                    <span style="color: #E8ECFF;">Kelly: <strong style="color: #00F5FF;">{format_currency(kelly['stake'])}</strong></span>
-                </div>
-            </div>
-            """
-        
-        # Total Points section
-        if "Total Points" in market_filter and pred.get("total_pick"):
-            total_pct = pred["total_prob"] * 100
-            total_odds = fair_odds_from_probability(pred["total_prob"]) * 0.95
-            total_kelly = kelly_stake(current_bankroll, pred["total_prob"], total_odds, state["kelly_fraction"], state["min_stake"], state["max_stake_pct"])
-            
-            card_html += f"""
-            <div style="background: rgba(181, 55, 255, 0.05); padding: 0.8rem; border-radius: 10px; margin: 0.5rem 0;">
-                <div style="color: #B537FF; font-size: 0.85rem; font-weight: 700; text-transform: uppercase;">📊 Total Points</div>
-                <div style="font-size: 1.1rem; font-weight: 900; color: #FFB800; margin: 0.3rem 0;">{pred["total_pick"]}</div>
-                <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
-                    <span style="color: #E8ECFF;">Prob: <strong style="color: #00F5FF;">{total_pct:.1f}%</strong></span>
-                    <span style="color: #E8ECFF;">Expected: <strong style="color: #00F5FF;">{pred["expected_total"]:.1f}</strong></span>
-                    <span style="color: #E8ECFF;">Kelly: <strong style="color: #00F5FF;">{format_currency(total_kelly['stake'])}</strong></span>
-                </div>
-            </div>
-            """
-        
-        # First Set Over/Under
-        if "First Set O/U" in market_filter and pred.get("first_pick"):
-            first_pct = pred["first_prob"] * 100
-            first_odds = fair_odds_from_probability(pred["first_prob"]) * 0.95
-            first_kelly = kelly_stake(current_bankroll, pred["first_prob"], first_odds, state["kelly_fraction"], state["min_stake"], state["max_stake_pct"])
-            
-            card_html += f"""
-            <div style="background: rgba(0, 255, 156, 0.05); padding: 0.8rem; border-radius: 10px; margin: 0.5rem 0;">
-                <div style="color: #B537FF; font-size: 0.85rem; font-weight: 700; text-transform: uppercase;">⚡ First Set 18.5</div>
-                <div style="font-size: 1.1rem; font-weight: 900; color: #00FF9C; margin: 0.3rem 0;">{pred["first_pick"]}</div>
-                <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
-                    <span style="color: #E8ECFF;">Prob: <strong style="color: #00F5FF;">{first_pct:.1f}%</strong></span>
-                    <span style="color: #E8ECFF;">Expected: <strong style="color: #00F5FF;">{pred["expected_first"]:.1f}</strong></span>
-                    <span style="color: #E8ECFF;">Kelly: <strong style="color: #00F5FF;">{format_currency(first_kelly['stake'])}</strong></span>
-                </div>
-            </div>
-            """
-        
-        # Sets Over/Under
-        if "Sets O/U" in market_filter and pred.get("sets_pick"):
-            sets_pct = pred["sets_prob"] * 100
-            sets_odds = fair_odds_from_probability(pred["sets_prob"]) * 0.95
-            sets_kelly = kelly_stake(current_bankroll, pred["sets_prob"], sets_odds, state["kelly_fraction"], state["min_stake"], state["max_stake_pct"])
-            
-            card_html += f"""
-            <div style="background: rgba(255, 184, 0, 0.05); padding: 0.8rem; border-radius: 10px; margin: 0.5rem 0;">
-                <div style="color: #B537FF; font-size: 0.85rem; font-weight: 700; text-transform: uppercase;">🎾 Sets 3.5</div>
-                <div style="font-size: 1.1rem; font-weight: 900; color: #FFB800; margin: 0.3rem 0;">{pred["sets_pick"]}</div>
-                <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
-                    <span style="color: #E8ECFF;">Prob: <strong style="color: #00F5FF;">{sets_pct:.1f}%</strong></span>
-                    <span style="color: #E8ECFF;">Expected: <strong style="color: #00F5FF;">{pred["expected_sets"]:.1f}</strong></span>
-                    <span style="color: #E8ECFF;">Kelly: <strong style="color: #00F5FF;">{format_currency(sets_kelly['stake'])}</strong></span>
-                </div>
-            </div>
-            """
-        
-        # AI reasoning (if ML pred available)
-        if pred.get("ml_pred"):
-            reason = generate_ai_reasoning(pred["ml_pred"], pred["player1"], pred["player2"])
-            card_html += f'<div class="ai-analysis" style="font-size: 0.85rem;">🧠 {reason}</div>'
-        
-        card_html += "</div>"
-        
-        st.markdown(card_html, unsafe_allow_html=True)
-        
-        # Track bet button for the winner
-        if kelly['stake'] > 0 and pred["winner_prob"] >= 0.65:
-            if st.button(f"📝 Track Winner Bet ({format_currency(kelly['stake'])})", key=f"track_all_{idx}"):
-                add_bet(state, {
-                    "match": pred["match"],
-                    "player1": pred["player1"],
-                    "player2": pred["player2"],
-                    "prediction": pred["winner_pred"],
-                    "confidence": pred["winner_prob"],
-                    "stake": kelly['stake'],
-                    "odds": market_odds,
-                    "market": "match_winner",
-                })
-                st.success("✅ Tracked in Vault!")
-                st.rerun()
-
-
-# ============================================
-# TRACK RECORD PAGE
-# ============================================
-elif page == "📈 Track Record":
-    st.markdown("# 📈 AI TRACK RECORD")
-    st.caption("Every prediction, every result - complete transparency")
-    
-    record = calculate_track_record()
-    
-    # Overall metrics
-    st.markdown("### 📊 Overall Performance")
-    
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        st.metric("Total Predictions", f"{record['total']:,}")
-    with m2:
-        st.metric("Settled", f"{record['settled']:,}", f"{record['pending']} pending")
-    with m3:
-        acc = record['winner_accuracy']
-        emoji = "🔥" if acc >= 65 else "⭐" if acc >= 60 else "⚠️"
-        st.metric("Winner Accuracy", f"{acc:.1f}%", emoji)
-    with m4:
-        high_acc = record['high_conf_accuracy']
-        st.metric("High Confidence", f"{high_acc:.1f}%", f"{record['high_conf_total']} bets")
-    
-    st.markdown("---")
-    
-    # Market breakdown
-    st.markdown("### 🎯 Accuracy by Market")
-    
-    markets_data = [
-        {"name": "🎯 Winner", "acc": record['winner_accuracy'], "total": record['settled']},
-        {"name": "📊 Total Points", "acc": record['total_accuracy'], "total": record.get('total_settled', 0)},
-        {"name": "⚡ First Set O/U", "acc": record['first_set_accuracy'], "total": record.get('first_settled', 0)},
-        {"name": "🎾 Sets O/U", "acc": record['sets_accuracy'], "total": record.get('sets_settled', 0)},
+def h2h_display_table(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
+    cols = [
+        "date_time",
+        "competition",
+        "player1",
+        "player2",
+        "winner",
+        "set_scores",
+        "total_points",
+        "first_set_total",
+        "sets_played",
     ]
-    
-    for m in markets_data:
-        if m['total'] > 0:
-            color = "#00FF9C" if m['acc'] >= 60 else "#FFB800" if m['acc'] >= 55 else "#FF3366"
-            st.markdown(f"""
-            <div class="pick-card">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div style="font-size: 1.1rem; font-weight: 700; color: #E8ECFF;">{m['name']}</div>
-                    <div style="font-size: 1.5rem; font-weight: 900; color: {color};">{m['acc']:.1f}%</div>
-                </div>
-                <div class="confidence-bar" style="margin-top: 0.5rem;">
-                    <div class="confidence-fill" style="width: {m['acc']}%; background: {color};"></div>
-                </div>
-                <div style="color: #B537FF; font-size: 0.85rem; margin-top: 0.3rem;">{m['total']} settled bets</div>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # Recent predictions
-    st.markdown("### 📋 Recent Predictions")
-    
-    predictions = load_predictions()
-    
-    if not predictions:
-        st.info("No predictions logged yet. Visit the All Picks page to generate predictions.")
+    out = df.loc[:, [c for c in cols if c in df.columns]].head(limit).copy()
+    if "date_time" in out:
+        out["date_time"] = pd.to_datetime(out["date_time"]).dt.strftime("%Y-%m-%d %H:%M")
+    return out
+
+
+def player_latest_table(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
+    cols = [
+        "date_time",
+        "competition",
+        "opponent",
+        "won",
+        "set_scores",
+        "points_for",
+        "points_against",
+        "total_points",
+        "first_set_total",
+    ]
+    out = df.loc[:, [c for c in cols if c in df.columns]].sort_values(
+        "date_time", ascending=False
+    ).head(limit).copy()
+    out["result"] = out["won"].map({True: "Win", False: "Loss"})
+    out = out.drop(columns=["won"])
+    out["date_time"] = pd.to_datetime(out["date_time"]).dt.strftime("%Y-%m-%d %H:%M")
+    return out
+
+
+@st.cache_data(ttl=30, show_spinner="Fetching official Setka upcoming matches...")
+def load_official_nearest() -> pd.DataFrame:
+    locs = location_map()
+    frame = fetch_nearest_matches()
+    frame = add_lagos_time(frame)
+    frame = add_location_names(frame, locs)
+    return frame
+
+
+@st.cache_data(ttl=15, show_spinner="Fetching official Setka live matches...")
+def load_official_live() -> pd.DataFrame:
+    locs = location_map()
+    frame = fetch_live_matches()
+    frame = add_lagos_time(frame)
+    frame = add_location_names(frame, locs)
+    return frame
+
+
+@st.cache_data(ttl=45, show_spinner="Fetching official Setka results...")
+def load_official_results(match_date: str, day_period: int | None) -> pd.DataFrame:
+    locs = location_map()
+    frame = fetch_results_for_date(match_date, day_period=day_period)
+    frame = add_lagos_time(frame)
+    frame = add_location_names(frame, locs)
+    return frame
+
+
+def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line: float, sets_line: float) -> dict:
+    # ---------------------------------------------------------------
+    # Use the ML model when a trained bundle is available in session.
+    # The ML bundle is created on the ML Lab page.  When missing the
+    # function falls back to the rule-based predict_match().
+    # ---------------------------------------------------------------
+    ml_bundle = st.session_state.get("ml_bundle")
+    if ml_bundle is not None:
+        _ml = predict_with_bundle(
+            ml_bundle,
+            str(row["player1"]), str(row["player2"]),
+            first_set_line=first_set_line,
+            total_points_line=total_points_line,
+            sets_line=sets_line,
+        )
+        # Build a merged dict: ML overrides core predictions, rule model
+        # provides supplementary fields the ML pipeline does not output.
+        pred = predict_match(
+            row["player1"], row["player2"],
+            player_stats, matches, global_stats,
+            first_set_line=first_set_line,
+            total_points_line=total_points_line,
+            sets_line=sets_line,
+        )
+        for _k in ("player_a_win_probability", "player_b_win_probability",
+                   "predicted_winner", "elo_probability", "elo_a", "elo_b", "elo_diff",
+                   "first_set_over_probability", "first_set_under_probability",
+                   "expected_first_set_points",
+                   "total_points_over_probability", "total_points_under_probability",
+                   "expected_total_points",
+                   "confidence", "confidence_score",
+                   "upset_risk", "upset_risk_flags"):
+            if _k in _ml:
+                pred[_k] = _ml[_k]
     else:
-        # Filter options
-        filter_col1, filter_col2 = st.columns(2)
-        with filter_col1:
-            status_filter = st.selectbox("Status", ["All", "Pending", "Settled", "Correct", "Incorrect"])
-        with filter_col2:
-            limit_show = st.selectbox("Show", [10, 25, 50, 100], index=1)
-        
-        # Filter predictions
-        filtered = predictions
-        if status_filter == "Pending":
-            filtered = [p for p in filtered if p.get("status") == "pending"]
-        elif status_filter == "Settled":
-            filtered = [p for p in filtered if p.get("status") == "settled"]
-        elif status_filter == "Correct":
-            filtered = [p for p in filtered if p.get("winner_correct") == True]
-        elif status_filter == "Incorrect":
-            filtered = [p for p in filtered if p.get("winner_correct") == False]
-        
-        # Show most recent first
-        filtered = list(reversed(filtered))[:limit_show]
-        
-        st.caption(f"Showing {len(filtered)} of {len(predictions)} total predictions")
-        
-        for pred in filtered:
-            status = pred.get("status", "pending")
-            
-            if status == "pending":
-                status_emoji = "⏳"
-                status_color = "#FFB800"
-                result_text = "Awaiting result"
-            elif pred.get("winner_correct"):
-                status_emoji = "✅"
-                status_color = "#00FF9C"
-                result_text = f"Correct! Actual: {pred.get('actual_winner', '?')}"
+        pred = predict_match(
+            row["player1"],
+            row["player2"],
+            player_stats,
+            matches,
+            global_stats,
+            first_set_line=first_set_line,
+            total_points_line=total_points_line,
+            sets_line=sets_line,
+        )
+    raw_winner_prob = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
+    winner_prob = calibrated_probability(raw_winner_prob, "winner")
+    total_pick = "Over" if pred["total_points_over_probability"] >= pred["total_points_under_probability"] else "Under"
+    raw_total_prob = max(pred["total_points_over_probability"], pred["total_points_under_probability"])
+    total_prob = calibrated_probability(raw_total_prob, "total")
+    first_pick = "Over" if pred["first_set_over_probability"] >= pred["first_set_under_probability"] else "Under"
+    raw_first_prob = max(pred["first_set_over_probability"], pred["first_set_under_probability"])
+    first_prob = calibrated_probability(raw_first_prob, "first_set")
+    sets_pick = "Over" if pred["sets_over_probability"] >= pred["sets_under_probability"] else "Under"
+    raw_sets_prob = max(pred["sets_over_probability"], pred["sets_under_probability"])
+    sets_prob = calibrated_probability(raw_sets_prob, "sets")
+    agreement = winner_component_agreement(pred, player_stats)
+    fatigue = match_fatigue_summary(
+        player_log,
+        row["player1"],
+        row["player2"],
+        row.get("start_date_lagos"),
+        row.get("start_time_lagos"),
+    )
+    winner_market_conf = market_confidence_label(winner_prob, pred["confidence"], pred.get("upset_risk", ""), agreement["winner_agreement_score"], fatigue["match_fatigue_risk"])
+    total_market_conf = market_confidence_label(total_prob, pred["confidence"], "Low", agreement["winner_agreement_score"], fatigue["match_fatigue_risk"])
+    first_market_conf = market_confidence_label(first_prob, pred["confidence"], "Low", agreement["winner_agreement_score"], fatigue["match_fatigue_risk"])
+    sets_market_conf = market_confidence_label(sets_prob, pred["confidence"], "Low", agreement["winner_agreement_score"], fatigue["match_fatigue_risk"])
+    return {
+        "match_id": row.get("match_id"),
+        "time_lagos": row.get("start_time_lagos"),
+        "date_lagos": row.get("start_date_lagos"),
+        "location": row.get("location"),
+        "match": f"{row['player1']} vs {row['player2']}",
+        "player1": row["player1"],
+        "player2": row["player2"],
+        "winner_pick": pred["predicted_winner"],
+        "winner_probability": winner_prob,
+        "winner_raw_probability": raw_winner_prob,
+        "winner_market_confidence": winner_market_conf,
+        "total_pick": total_pick,
+        "total_probability": total_prob,
+        "total_raw_probability": raw_total_prob,
+        "total_market_confidence": total_market_conf,
+        "expected_total_points": pred["expected_total_points"],
+        "total_points_line": float(total_points_line),
+        "first_set_pick": first_pick,
+        "first_set_probability": first_prob,
+        "first_set_raw_probability": raw_first_prob,
+        "first_set_market_confidence": first_market_conf,
+        "expected_first_set_points": pred["expected_first_set_points"],
+        "first_set_line": float(first_set_line),
+        "sets_pick": sets_pick,
+        "sets_probability": sets_prob,
+        "sets_raw_probability": raw_sets_prob,
+        "sets_market_confidence": sets_market_conf,
+        "expected_sets_played": pred["expected_sets_played"],
+        "sets_line": pred["sets_line"],
+        "confidence": pred["confidence"],
+        "confidence_score": pred["confidence_score"],
+        "upset_risk": pred.get("upset_risk", ""),
+        "upset_risk_flags": ", ".join(pred.get("upset_risk_flags", [])),
+        "h2h_matches": pred["h2h_matches"],
+        **agreement,
+        **fatigue,
+        "player1_reliability": player_reliability_tags(player_stats, row["player1"]),
+        "player2_reliability": player_reliability_tags(player_stats, row["player2"]),
+    }
+
+
+def pick_strength(probability: float | None, confidence: str | None = None, upset_risk: str | None = None) -> str:
+    if probability is None or pd.isna(probability):
+        return "Avoid"
+    p = float(probability)
+    confidence = confidence or ""
+    upset_risk = upset_risk or ""
+    if upset_risk == "High" and p < 0.70:
+        return "Avoid"
+    if upset_risk == "Medium" and p < 0.62:
+        return "Watch"
+    if p >= 0.68 and confidence == "High" and upset_risk != "High":
+        return "Strong"
+    if p >= 0.60:
+        return "Medium"
+    if p >= 0.55:
+        return "Watch"
+    return "Avoid"
+
+
+def strength_class(strength: str) -> str:
+    return {
+        "Strong": "badge-strong",
+        "Medium": "badge-medium",
+        "Watch": "badge-watch",
+        "Avoid": "badge-avoid",
+    }.get(strength, "badge-avoid")
+
+
+def apply_pick_strengths(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if out.empty:
+        return out
+    # BROKEN MARKETS (total_points R²=0.02, first_set_points R²=0.00):
+    # Zero out so they never become the "best market".  Revisit once models
+    # are retrained and R² improves.
+    for _col in ["total_probability", "first_set_probability"]:
+        if _col in out:
+            out[_col] = 0.0
+    out["winner_strength"] = out.apply(
+        lambda r: pick_strength(r.get("winner_probability"), r.get("confidence"), r.get("upset_risk")), axis=1
+    )
+    out["total_strength"] = out.apply(
+        lambda r: pick_strength(r.get("total_probability"), r.get("confidence"), r.get("upset_risk")), axis=1
+    )
+    out["first_set_strength"] = out.apply(
+        lambda r: pick_strength(r.get("first_set_probability"), r.get("confidence"), r.get("upset_risk")), axis=1
+    )
+    out["sets_strength"] = out.apply(
+        lambda r: pick_strength(r.get("sets_probability"), r.get("confidence"), r.get("upset_risk")), axis=1
+    )
+    out["best_market"] = out[["winner_probability", "total_probability", "first_set_probability", "sets_probability"]].idxmax(axis=1)
+    out["best_market"] = out["best_market"].map(
+        {
+            "winner_probability": "Winner",
+            "total_probability": "Total",
+            "first_set_probability": "1st Set",
+            "sets_probability": "Sets",
+        }
+    )
+    out["best_probability"] = out[["winner_probability", "total_probability", "first_set_probability", "sets_probability"]].max(axis=1)
+    out["best_pick"] = out.apply(
+        lambda r: r["winner_pick"]
+        if r["best_market"] == "Winner"
+        else f"{r['sets_pick']} sets",
+        axis=1,
+    )
+    out["best_strength"] = out.apply(
+        lambda r: pick_strength(r.get("best_probability"), r.get("confidence"), r.get("upset_risk")), axis=1
+    )
+    out["best_market_confidence"] = out.apply(
+        lambda r: r.get("winner_market_confidence")
+        if r.get("best_market") == "Winner"
+        else r.get("sets_market_confidence"),
+        axis=1,
+    )
+    out["snapshot_time_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
+    return out
+
+
+def format_prediction_table(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    for col in ["winner_probability", "total_probability", "first_set_probability", "sets_probability", "best_probability"]:
+        if col in out:
+            out[col] = out[col].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+    for col in ["expected_total_points", "expected_first_set_points", "expected_sets_played", "confidence_score"]:
+        if col in out:
+            out[col] = out[col].map(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
+    return out
+
+
+def render_mobile_pick_cards(df: pd.DataFrame, limit: int = 8) -> None:
+    for _, r in df.head(limit).iterrows():
+        strength = r.get("best_strength", "Avoid")
+        css_class = strength_class(strength)
+        st.markdown(
+            f"""
+<div class="pick-card">
+  <div class="pick-title">{r.get('time_lagos', '')} • {r.get('match', '')}</div>
+  <div class="pick-meta">{r.get('location', '')} • H2H {r.get('h2h_matches', 0)} • Agreement {r.get('winner_agreement', '-')} • Fatigue {r.get('match_fatigue_risk', '-')} • Upset {r.get('upset_risk', '')}</div>
+  <div>Best: <b>{r.get('best_market', '')}</b> — <b>{r.get('best_pick', '')}</b> ({r.get('best_probability', 0):.1%}) <span class="{css_class}">{strength}</span> • {r.get('best_market_confidence', '')}</div>
+  <div class="pick-meta">Winner: {r.get('winner_pick', '')} {r.get('winner_probability', 0):.1%} • Sets: {r.get('sets_pick', '')} {r.get('sets_probability', 0):.1%}</div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+
+def enable_browser_auto_refresh(seconds: int) -> None:
+    if seconds <= 0:
+        return
+    components.html(
+        f"""
+<script>
+  setTimeout(function() {{ window.parent.location.reload(); }}, {int(seconds) * 1000});
+</script>
+""",
+        height=0,
+    )
+
+
+def decimal_from_text(value: str) -> float | None:
+    try:
+        number = float(str(value).strip())
+        return number if number > 1 else None
+    except Exception:
+        return None
+
+
+def parse_decimal_odds(text: str) -> list[float]:
+    return [x for x in (decimal_from_text(v) for v in re.split(r"[\s,;|/]+", text or "")) if x]
+
+
+def combined_decimal_odds(odds: list[float]) -> float:
+    value = 1.0
+    for odd in odds:
+        value *= float(odd)
+    return value
+
+
+def kelly_fraction(probability: float, decimal_odds: float) -> float:
+    b = decimal_odds - 1
+    if b <= 0:
+        return 0.0
+    q = 1 - probability
+    return max(0.0, ((b * probability) - q) / b)
+
+
+def implied_probability(decimal_odds: float) -> float:
+    return 1 / decimal_odds if decimal_odds and decimal_odds > 1 else 0.0
+
+
+def fair_decimal(probability: float) -> float | None:
+    if probability is None or pd.isna(probability) or probability <= 0:
+        return None
+    return 1 / float(probability)
+
+
+def minimum_value_odds(probability: float, edge_buffer: float = 0.03) -> float | None:
+    if probability is None or pd.isna(probability):
+        return None
+    usable_probability = max(0.01, float(probability) - float(edge_buffer))
+    return 1 / usable_probability
+
+
+def owner_edge_score(row: pd.Series) -> float:
+    prob = float(row.get("best_probability", 0) or 0)
+    confidence_bonus = {"High": 0.08, "Medium": 0.03, "Low": -0.05}.get(str(row.get("confidence", "")), 0)
+    risk_penalty = {"Low": 0.00, "Medium": 0.06, "High": 0.18}.get(str(row.get("upset_risk", "")), 0.08)
+    fatigue_penalty = {"Low": 0.00, "Medium": 0.03, "High": 0.08, "Unknown": 0.01}.get(str(row.get("match_fatigue_risk", "")), 0.01)
+    h2h_bonus = min(float(row.get("h2h_matches", 0) or 0), 60) / 1000
+    strength_bonus = {"Strong": 0.04, "Medium": 0.01, "Watch": -0.02, "Avoid": -0.10}.get(str(row.get("best_strength", "")), 0)
+    agreement_bonus = (float(row.get("winner_agreement_score", 0.5) or 0.5) - 0.5) * 0.10
+    market_bonus = {"Elite": 0.06, "Strong": 0.03, "Playable": 0.00, "Weak": -0.08}.get(str(row.get("best_market_confidence", "")), 0.0)
+    return max(0.0, min(1.0, prob + confidence_bonus + h2h_bonus + strength_bonus + agreement_bonus + market_bonus - risk_penalty - fatigue_penalty))
+
+
+def owner_decision(row: pd.Series) -> str:
+    score = float(row.get("edge_score", 0) or 0)
+    prob = float(row.get("best_probability", 0) or 0)
+    agreement = float(row.get("winner_agreement_score", 0.5) or 0.5)
+    market_conf = str(row.get("best_market_confidence", ""))
+    if row.get("best_market") == "Winner" and row.get("upset_risk") == "High":
+        return "NO BET"
+    if row.get("match_fatigue_risk") == "High" and row.get("best_market") == "Winner":
+        return "NO BET"
+    if market_conf == "Weak":
+        return "NO BET"
+    if score >= 0.72 and prob >= 0.60 and agreement >= 0.58 and market_conf in ["Elite", "Strong", "Playable"]:
+        return "GREEN"
+    if score >= 0.64 and prob >= 0.56:
+        return "WATCH"
+    return "NO BET"
+
+
+def owner_reason(row: pd.Series) -> str:
+    reasons = []
+    if row.get("confidence") == "High":
+        reasons.append("high confidence")
+    if float(row.get("h2h_matches", 0) or 0) >= 10:
+        reasons.append("useful H2H sample")
+    if float(row.get("winner_agreement_score", 0) or 0) >= 0.67:
+        reasons.append(f"model agreement {row.get('winner_agreement', '-')}")
+    if row.get("best_market_confidence") in ["Elite", "Strong"]:
+        reasons.append(f"{row.get('best_market_confidence')} market confidence")
+    if row.get("upset_risk") == "Low":
+        reasons.append("low upset risk")
+    if row.get("match_fatigue_risk") == "Low":
+        reasons.append("low fatigue risk")
+    if row.get("best_strength") in ["Strong", "Medium"]:
+        reasons.append(f"{row.get('best_strength')} model strength")
+    if not reasons:
+        reasons.append("price-dependent only")
+    return ", ".join(reasons)
+
+
+FORMER_PREDICTIONS = {
+    804491: {"winner_pick": "Dmitri Gribcov", "total_pick": "Over", "first_set_pick": "Over"},
+    804612: {"winner_pick": "Orest Hura", "total_pick": "Over", "first_set_pick": "Over"},
+    804655: {"winner_pick": "Yan Krol", "total_pick": "Over", "first_set_pick": "Over"},
+    804627: {"winner_pick": "Oleh Lutsyshyn", "total_pick": "Under", "first_set_pick": "Over"},
+    804640: {"winner_pick": "Yevhen Kryvorotko", "total_pick": "Under", "first_set_pick": "Under"},
+    804492: {"winner_pick": "Mihail Filip", "total_pick": "Under", "first_set_pick": "Over"},
+    804613: {"winner_pick": "Anton Shypilov", "total_pick": "Over", "first_set_pick": "Over"},
+    804656: {"winner_pick": "Vitalii Khamurda", "total_pick": "Over", "first_set_pick": "Over"},
+    804628: {"winner_pick": "Serhii Prus", "total_pick": "Under", "first_set_pick": "Over"},
+    804641: {"winner_pick": "Serhei Hohenko", "total_pick": "Under", "first_set_pick": "Over"},
+}
+
+
+def grade_pick(prediction: str | None, actual: str | None) -> str:
+    if not prediction or not actual:
+        return "Pending"
+    return "✅" if str(prediction).strip() == str(actual).strip() else "❌"
+
+
+def bet_profit_loss(stake: float, decimal_odds: float, result: str) -> float | None:
+    result = str(result).lower()
+    stake = float(stake or 0)
+    decimal_odds = float(decimal_odds or 0)
+    if result == "won":
+        return stake * max(decimal_odds - 1, 0)
+    if result == "lost":
+        return -stake
+    if result == "void":
+        return 0.0
+    return None
+
+
+def journal_summary(frame: pd.DataFrame) -> dict[str, float | int | None]:
+    if frame is None or frame.empty:
+        return {"bets": 0, "settled": 0, "staked": 0.0, "profit": 0.0, "roi": None, "win_rate": None}
+    df = frame.copy()
+    df["stake"] = pd.to_numeric(df.get("stake", 0), errors="coerce").fillna(0)
+    df["profit_loss"] = pd.to_numeric(df.get("profit_loss"), errors="coerce")
+    settled = df.loc[df["profit_loss"].notna()]
+    staked = float(settled["stake"].sum()) if not settled.empty else 0.0
+    profit = float(settled["profit_loss"].sum()) if not settled.empty else 0.0
+    wins = int((settled.get("result", "").astype(str).str.lower() == "won").sum()) if not settled.empty else 0
+    losses = int((settled.get("result", "").astype(str).str.lower() == "lost").sum()) if not settled.empty else 0
+    return {
+        "bets": int(len(df)),
+        "settled": int(len(settled)),
+        "staked": staked,
+        "profit": profit,
+        "roi": profit / staked if staked else None,
+        "win_rate": wins / (wins + losses) if (wins + losses) else None,
+    }
+
+
+def save_strong_picks_to_tracker(frame: pd.DataFrame, source: str) -> int:
+    """Persist GREEN/strong picks until the user resets the tracker.
+
+    Uses deterministic duplicate checking so page refreshes do not duplicate rows
+    or create endless GitHub commits.
+    """
+    if frame is None or frame.empty:
+        return 0
+    saved = frame.copy()
+    saved["saved_at_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
+    saved["tracker_source"] = source
+    existing = load_strong_picks()
+    subset = ["match_id", "best_market", "best_pick"]
+    if not existing.empty and all(c in existing.columns for c in subset):
+        existing_keys = set(existing[subset].astype(str).agg("|".join, axis=1))
+        saved_keys = saved[subset].astype(str).agg("|".join, axis=1)
+        saved = saved.loc[~saved_keys.isin(existing_keys)].copy()
+    if saved.empty:
+        combined = existing
+        st.session_state["strong_pick_tracker"] = combined
+        return 0
+    combined = save_strong_picks(saved)
+    st.session_state["strong_pick_tracker"] = combined
+    auto_create_journal_from_picks(saved, source=source)
+    return len(saved)
+
+
+def auto_create_journal_from_picks(frame: pd.DataFrame, source: str = "auto") -> int:
+    """Create pending bankroll journal records from strong picks automatically."""
+    if frame is None or frame.empty:
+        return 0
+    existing = load_bankroll_journal()
+    existing_ids = set(existing["journal_id"].astype(str)) if not existing.empty and "journal_id" in existing.columns else set()
+    rows = []
+    for _, r in frame.iterrows():
+        match_id = str(r.get("match_id", ""))
+        market = str(r.get("best_market", ""))
+        pick = str(r.get("best_pick", ""))
+        journal_id = f"strong-{match_id}-{market}-{pick}"
+        if journal_id in existing_ids:
+            continue
+        stake = r.get("stake_cap", r.get("max_suggested_stake", 0.0))
+        try:
+            stake = float(stake) if pd.notna(stake) else 0.0
+        except Exception:
+            stake = 0.0
+        odds_taken = r.get("minimum_value_odds", None)
+        try:
+            odds_taken = float(odds_taken) if pd.notna(odds_taken) else None
+        except Exception:
+            odds_taken = None
+        rows.append({
+            "journal_id": journal_id,
+            "date": str(r.get("date_lagos", pd.Timestamp.now(tz="Africa/Lagos").date())),
+            "saved_at_lagos": pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S"),
+            "match_id": match_id,
+            "match": r.get("match", ""),
+            "market": market,
+            "pick": pick,
+            "stake": stake,
+            "odds_taken": odds_taken,
+            "result": "Pending",
+            "profit_loss": None,
+            "bookmaker": "",
+            "value_note": "Auto-created from strong pick",
+            "source": source,
+        })
+    if not rows:
+        return 0
+    save_bankroll_journal(pd.DataFrame(rows))
+    return len(rows)
+
+
+def update_journal_from_graded_picks(graded: pd.DataFrame) -> int:
+    """When Strong Pick Tracker grades results, update matching journal rows."""
+    if graded is None or graded.empty:
+        return 0
+    journal = load_bankroll_journal()
+    if journal.empty or "journal_id" not in journal.columns:
+        return 0
+    updates = []
+    for _, r in graded.iterrows():
+        grade = r.get("best_pick_grade")
+        if grade not in ["✅", "❌"]:
+            continue
+        market = str(r.get("best_market", ""))
+        pick = str(r.get("best_pick", ""))
+        match_id = str(r.get("match_id", ""))
+        journal_id = f"strong-{match_id}-{market}-{pick}"
+        matched = journal.loc[journal["journal_id"].astype(str) == journal_id]
+        if matched.empty:
+            continue
+        base = matched.iloc[-1].to_dict()
+        result = "Won" if grade == "✅" else "Lost"
+        stake = float(base.get("stake", 0) or 0)
+        odds = float(base.get("odds_taken", 0) or 0) if pd.notna(base.get("odds_taken")) else 0
+        base["result"] = result
+        base["profit_loss"] = bet_profit_loss(stake, odds, result)
+        base["settled_at_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
+        base["actual_best_market_result"] = r.get("actual_best_market_result")
+        updates.append(base)
+    if not updates:
+        return 0
+    save_bankroll_journal(pd.DataFrame(updates))
+    return len(updates)
+
+
+def expand_setka_result_dates(date_texts: list[str]) -> list[str]:
+    """Setka night tournaments can map to previous/next official dates.
+
+    If a saved pick is Lagos date 2026-07-25, official tournament/result
+    rows may be under 2026-07-24 or 2026-07-25 depending on location/period.
+    So the tracker checks date -1, date, and date +1.
+    """
+    dates: set[str] = set()
+    for value in date_texts:
+        dt = pd.to_datetime(value, errors="coerce")
+        if pd.isna(dt):
+            continue
+        base = dt.date()
+        for offset in [-1, 0, 1]:
+            dates.add((pd.Timestamp(base) + pd.Timedelta(days=offset)).date().isoformat())
+    return sorted(dates)
+
+
+def tracker_result_dates(track: pd.DataFrame, manual_date) -> list[str]:
+    """Build a robust official Setka date search window for saved picks."""
+    seeds: list[str] = [str(manual_date), pd.Timestamp.now(tz="Africa/Lagos").date().isoformat()]
+    for col in ["date_lagos", "saved_at_lagos"]:
+        if col in track.columns:
+            parsed = pd.to_datetime(track[col], errors="coerce").dropna()
+            seeds.extend([x.date().isoformat() for x in parsed.tolist()])
+    dates: set[str] = set()
+    for seed in seeds:
+        dt = pd.to_datetime(seed, errors="coerce")
+        if pd.isna(dt):
+            continue
+        base = dt.date()
+        # Wider than before because Setka night events can sit on adjacent official days.
+        for offset in range(-3, 4):
+            dates.add((pd.Timestamp(base) + pd.Timedelta(days=offset)).date().isoformat())
+    return sorted(dates)
+
+
+def fetch_tracker_results(track: pd.DataFrame, manual_date) -> pd.DataFrame:
+    dates = tracker_result_dates(track, manual_date)
+    result_df = sync_official_results_for_dates(dates)
+    # Add the current live widget too; it often contains just-finished/live rows before tournament endpoint catches up.
+    try:
+        live_now = load_official_live()
+        if live_now is not None and not live_now.empty:
+            live_now = live_now.copy()
+            live_now["synced_at_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
+            result_df = pd.concat([result_df, live_now], ignore_index=True) if not result_df.empty else live_now
+            save_daily_results(live_now)
+    except Exception:
+        pass
+    if result_df is None or result_df.empty:
+        return pd.DataFrame()
+    if "match_id" in result_df.columns:
+        result_df["match_id"] = pd.to_numeric(result_df["match_id"], errors="coerce")
+        result_df = result_df.dropna(subset=["match_id"])
+        result_df["match_id"] = result_df["match_id"].astype("int64")
+        result_df = result_df.drop_duplicates(subset=["match_id"], keep="last")
+    return result_df
+
+
+def sync_official_results_for_dates(date_texts: list[str]) -> pd.DataFrame:
+    """Fetch official Setka results for dates and persist them for future grading/training export."""
+    frames = []
+    for date_text in date_texts:
+        try:
+            frame = load_official_results(str(date_text), None)
+            if frame is not None and not frame.empty:
+                frame = frame.copy()
+                frame["synced_at_lagos"] = pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")
+                frames.append(frame)
+        except Exception:
+            continue
+    if not frames:
+        return load_daily_results()
+    combined_new = pd.concat(frames, ignore_index=True)
+    return save_daily_results(combined_new)
+
+
+def grade_best_pick(row: pd.Series) -> tuple[str, str | None]:
+    market = str(row.get("best_market", ""))
+    pick = str(row.get("best_pick", ""))
+    if pd.isna(row.get("status")) or str(row.get("status")) not in ["Finished", "Technical"]:
+        return "Pending", None
+    if market == "Winner":
+        actual = row.get("winner") or None
+        return grade_pick(row.get("winner_pick"), actual), actual
+    if market == "Total":
+        line = float(row.get("total_points_line", 75.5) or 75.5)
+        if pd.isna(row.get("total_points")):
+            return "Pending", None
+        actual = "Over" if float(row.get("total_points")) > line else "Under"
+        return grade_pick(row.get("total_pick"), actual), f"{actual} {line}"
+    if market == "1st Set":
+        line = float(row.get("first_set_line", 18.5) or 18.5)
+        if pd.isna(row.get("first_set_total")):
+            return "Pending", None
+        actual = "Over" if float(row.get("first_set_total")) > line else "Under"
+        return grade_pick(row.get("first_set_pick"), actual), f"{actual} {line}"
+    if market == "Sets":
+        line = float(row.get("sets_line", 3.5) or 3.5)
+        if pd.isna(row.get("sets_played")):
+            return "Pending", None
+        actual = "Over" if float(row.get("sets_played")) > line else "Under"
+        return grade_pick(row.get("sets_pick"), actual), f"{actual} {line}"
+    return "Pending", None
+
+
+if page == "Home":
+    st.markdown(
+        """
+<div class="hero">
+  <div class="small-muted">🏓 SETKA CUP TABLE-TENNIS PREDICTION DASHBOARD</div>
+  <h1>Predict Setka smarter with data.</h1>
+  <p>Focused on Setka Cup table tennis: live fixtures, winner picks, total-points, first-set Over/Under 18.5, result checking, player stats, and H2H analysis.</p>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Historical Setka matches", f"{global_stats['match_count']:,}")
+    m2.metric("Players tracked", f"{global_stats['player_count']:,}")
+    m3.metric("Main sport", "Table Tennis")
+    m4.metric("Main timezone", "Lagos")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown('<div class="feature-card"><h3>💎 Owner Edge Engine</h3><p>A strict no-bet-first control room that gives minimum value odds, bankroll caps, and only GREEN/WATCH/NO BET decisions.</p></div>', unsafe_allow_html=True)
+    with c2:
+        st.markdown('<div class="feature-card"><h3>✅ Setka Result Checker</h3><p>Official Setka scores, set totals, live status, and grading for prediction CSV snapshots.</p></div>', unsafe_allow_html=True)
+    with c3:
+        st.markdown('<div class="feature-card"><h3>🏓 Table Tennis Predictor</h3><p>Player stats, leaderboard, head-to-head, expected total points, and first-set Over/Under 18.5.</p></div>', unsafe_allow_html=True)
+
+    c4, c5, c6 = st.columns(3)
+    with c4:
+        st.markdown('<div class="feature-card"><h3>🧮 Smart Stake Calc</h3><p>Optional table-tennis stake planner with payout, implied probability, model edge, EV, and safer stake sizing.</p></div>', unsafe_allow_html=True)
+    with c5:
+        st.markdown('<div class="feature-card"><h3>🎟️ Bet Slip Tools</h3><p>Optional odds slip calculator for table-tennis selections: combined odds, payout, and risk level.</p></div>', unsafe_allow_html=True)
+    with c6:
+        st.markdown('<div class="feature-card"><h3>🎯 Accuracy Lab</h3><p>Backtest recent Setka matches, discover stronger probability filters, and reduce weak picks.</p></div>', unsafe_allow_html=True)
+
+    st.info("This app is for analytical decision support. It does not guarantee results and is not financial advice.")
+
+
+elif page == "Setka Trading Desk":
+    st.title("💎 Setka Trading Desk")
+    st.markdown("Premium owner terminal: live ticker, best value picks, NO BET zone, bankroll protection, and model health.")
+
+    st.error("If you are losing back-to-back: stop chasing. Use this page in Protection Mode and accept NO BET when the edge is not clean.")
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    with st.sidebar:
+        st.divider()
+        st.caption("Trading Desk controls")
+        desk_mode = st.selectbox("Mode", ["Protection Mode", "Balanced Mode", "Aggressive Mode"], index=0)
+        desk_min_confidence = st.slider("Min confidence %", 50, 95, 65, 1, key="desk_min_conf",
+                                       help="Picks below this confidence are shown but marked as NO BET.")
+        desk_auto_refresh = st.checkbox("Auto-refresh desk", value=False)
+        desk_refresh_seconds = st.selectbox("Desk refresh every", [10, 15, 30, 60], index=1)
+    if desk_auto_refresh:
+        enable_browser_auto_refresh(desk_refresh_seconds)
+
+    d1, d2, d3, d4, d5 = st.columns(5)
+    with d1:
+        desk_bankroll = st.number_input("Bankroll", min_value=0.0, value=10000.0, step=500.0, key="desk_bankroll")
+    with d2:
+        daily_loss_limit_pct = st.slider("Daily stop-loss %", 1, 30, 10, 1, key="desk_loss_limit") / 100
+    with d3:
+        losses_today = st.number_input("Losses today", min_value=0.0, value=0.0, step=100.0, key="desk_losses")
+    with d4:
+        daily_risk_cap_pct = st.slider("Daily risk cap %", 1, 30, 8, 1, key="desk_risk_cap") / 100
+    with d5:
+        if st.button("Refresh desk", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+
+    if desk_mode == "Protection Mode":
+        min_green_score, min_green_prob, required_edge_buffer, max_pick_stake_pct = 0.76, 0.62, 0.05, 0.005
+    elif desk_mode == "Balanced Mode":
+        min_green_score, min_green_prob, required_edge_buffer, max_pick_stake_pct = 0.72, 0.60, 0.03, 0.010
+    else:
+        min_green_score, min_green_prob, required_edge_buffer, max_pick_stake_pct = 0.68, 0.58, 0.02, 0.015
+
+    stop_loss_amount = desk_bankroll * daily_loss_limit_pct
+    daily_risk_cap = desk_bankroll * daily_risk_cap_pct
+    stop_active = losses_today >= stop_loss_amount and stop_loss_amount > 0
+    remaining_loss_room = max(0.0, stop_loss_amount - losses_today)
+
+    try:
+        live_feed = load_official_live()
+    except Exception:
+        live_feed = pd.DataFrame()
+    try:
+        upcoming = load_official_nearest().head(30)
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    # Live ticker
+    st.subheader("🔴 Live ticker")
+    if live_feed.empty:
+        st.info("No live matches returned right now.")
+    else:
+        live_view = live_feed.copy()
+        live_view["match"] = live_view["player1"] + " vs " + live_view["player2"]
+        live_view["score"] = live_view["player1_score"].fillna(0).astype(int).astype(str) + " - " + live_view["player2_score"].fillna(0).astype(int).astype(str)
+        ticker_cols = ["start_time_lagos", "location", "status", "match", "score", "set_scores", "active_player"]
+        st.dataframe(live_view[[c for c in ticker_cols if c in live_view.columns]].head(12), use_container_width=True, height=260)
+
+    # Upcoming edge scan
+    rows = []
+    for _, match_row in upcoming.iterrows():
+        if match_row.get("player1") and match_row.get("player2"):
+            rows.append(prediction_pick_row(match_row, 18.5, 75.5, 3.5))
+    desk_df = apply_pick_strengths(pd.DataFrame(rows))
+    if desk_df.empty:
+        st.warning("No upcoming matches available for desk scan.")
+        st.stop()
+
+    desk_df["edge_score"] = desk_df.apply(owner_edge_score, axis=1)
+    desk_df["fair_odds"] = desk_df["best_probability"].map(fair_decimal)
+    desk_df["minimum_value_odds"] = desk_df["best_probability"].map(lambda p: minimum_value_odds(p, required_edge_buffer))
+    desk_df["reason"] = desk_df.apply(owner_reason, axis=1)
+
+    desk_min_conf_val = desk_min_confidence / 100.0
+
+    def desk_decision(row):
+        if stop_active:
+            return "STOP"
+        # Hard confidence floor: reject picks below the user's minimum threshold
+        if row.get("winner_raw_probability", 0) < desk_min_conf_val:
+            return "NO BET"
+        if row.get("best_market") == "Winner" and row.get("upset_risk") == "High":
+            return "NO BET"
+        if row.get("best_market") == "Winner" and row.get("match_fatigue_risk") == "High":
+            return "NO BET"
+        if row.get("best_market_confidence") == "Weak":
+            return "NO BET"
+        if (
+            row.get("edge_score", 0) >= min_green_score
+            and row.get("best_probability", 0) >= min_green_prob
+            and row.get("best_strength") in ["Strong", "Medium"]
+            and row.get("best_market_confidence") in ["Elite", "Strong", "Playable"]
+            and float(row.get("winner_agreement_score", 0.5) or 0.5) >= 0.58
+        ):
+            return "GREEN"
+        if row.get("edge_score", 0) >= (min_green_score - 0.08) and row.get("best_probability", 0) >= 0.56:
+            return "WATCH"
+        return "NO BET"
+
+    desk_df["desk_decision"] = desk_df.apply(desk_decision, axis=1)
+    desk_df["stake_cap"] = desk_df.apply(
+        lambda r: 0.0 if r["desk_decision"] != "GREEN" else min(desk_bankroll * max_pick_stake_pct, daily_risk_cap, remaining_loss_room if remaining_loss_room > 0 else desk_bankroll * max_pick_stake_pct),
+        axis=1,
+    )
+
+    green = desk_df.loc[desk_df["desk_decision"] == "GREEN"].sort_values("edge_score", ascending=False)
+    watch = desk_df.loc[desk_df["desk_decision"] == "WATCH"].sort_values("edge_score", ascending=False)
+    nobet = desk_df.loc[desk_df["desk_decision"].isin(["NO BET", "STOP"])]
+    auto_saved_green = save_strong_picks_to_tracker(green, "Setka Trading Desk Auto") if not green.empty else 0
+
+    st.subheader("🛡️ Bankroll protection")
+    p1, p2, p3, p4, p5 = st.columns(5)
+    p1.metric("Mode", desk_mode)
+    p2.metric("Stop-loss", f"{stop_loss_amount:,.2f}")
+    p3.metric("Loss room left", f"{remaining_loss_room:,.2f}")
+    p4.metric("Daily risk cap", f"{daily_risk_cap:,.2f}")
+    p5.metric("Status", "STOP" if stop_active else "SAFE")
+    if stop_active:
+        st.error("STOP MODE ACTIVE: Daily loss limit reached. The desk will not recommend new stakes.")
+
+    st.subheader("💚 GREEN opportunities")
+    cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "minimum_value_odds", "stake_cap", "best_market_confidence", "winner_agreement", "match_fatigue_risk", "confidence", "upset_risk", "reason"]
+    green_display = green[cols].copy()
+    for c in ["best_probability", "edge_score"]:
+        green_display[c] = green_display[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+    for c in ["minimum_value_odds", "stake_cap"]:
+        green_display[c] = green_display[c].map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+    if green_display.empty:
+        st.info("No GREEN opportunities right now. In Protection Mode this is normal. Wait for cleaner spots.")
+    else:
+        if auto_saved_green:
+            st.success(f"Auto-saved {auto_saved_green} new GREEN pick(s) to Strong Pick Tracker and Bankroll Journal.")
+        st.dataframe(green_display, use_container_width=True, height=300)
+        if st.button("Force save GREEN picks again", key="save_trading_green"):
+            count = save_strong_picks_to_tracker(green, "Setka Trading Desk")
+            st.success(f"Saved {count} new GREEN picks to Strong Pick Tracker.")
+
+    st.subheader("🧠 Model health")
+    h1, h2, h3, h4 = st.columns(4)
+    h1.metric("Scanned", f"{len(desk_df):,}")
+    h2.metric("GREEN", f"{len(green):,}")
+    h3.metric("WATCH", f"{len(watch):,}")
+    h4.metric("NO BET/STOP", f"{len(nobet):,}")
+
+    with st.expander("WATCH and NO BET board", expanded=False):
+        full_cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "desk_decision", "minimum_value_odds", "best_market_confidence", "winner_agreement", "match_fatigue_risk", "confidence", "upset_risk", "upset_risk_flags", "reason"]
+        full = desk_df[full_cols].sort_values(["desk_decision", "edge_score"], ascending=[True, False]).copy()
+        for c in ["best_probability", "edge_score"]:
+            full[c] = full[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+        full["minimum_value_odds"] = full["minimum_value_odds"].map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+        st.dataframe(full, use_container_width=True, height=520)
+
+    st.download_button("Download Trading Desk CSV", desk_df.to_csv(index=False).encode("utf-8"), "setka_trading_desk.csv", "text/csv")
+    st.caption("Professional rule: no odds value, no bet. Stop-loss reached, no bet. Weak edge, no bet.")
+
+
+elif page == "Live Predictions":
+    st.title("🔴 Live Setka Predictions")
+    st.markdown("Fetch upcoming matches from the official Setka API and generate winner, total-points, and first-set picks in Lagos time.")
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    with st.sidebar:
+        st.divider()
+        st.caption("Live prediction filters")
+        live_limit = st.slider("Upcoming matches to read", 5, 50, 20, 5)
+        min_ml_confidence = st.slider("Min ML confidence %", 50, 95, 65, 1,
+                                      help="Only show predictions where the model is >= this % confident. Default 65% protects your bankroll.")
+        hide_broken_markets = st.checkbox("Hide broken markets (Total Points, 1st Set)", value=True,
+                                          help="Total points (R²=0.02) and 1st Set points (R²=0.00) are currently non-predictive and hidden by default.")
+        show_only_strong = st.checkbox("Show only best picks passing filters", value=False)
+        hide_high_upset = st.checkbox("Hide high upset-risk winner picks", value=True)
+        auto_refresh = st.checkbox("Auto-refresh page", value=False)
+        refresh_seconds = st.selectbox("Refresh every", [15, 30, 60, 120], index=1)
+
+    if auto_refresh:
+        enable_browser_auto_refresh(refresh_seconds)
+
+    c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1])
+    with c1:
+        first_set_line = st.number_input("1st set line", 10.5, 35.5, 18.5, 0.5, key="live_first")
+    with c2:
+        total_points_line = st.number_input("Total points line", 30.5, 140.5, 75.5, 0.5, key="live_total")
+    with c3:
+        sets_line = st.selectbox("Sets line", [3.5, 4.5], index=0, key="live_sets")
+    with c4:
+        if st.button("Refresh official feed", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+    with c5:
+        st.caption("Cache refreshes automatically every 30 seconds.")
+
+    try:
+        upcoming = load_official_nearest().head(live_limit)
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    rows = []
+    for _, match_row in upcoming.iterrows():
+        if match_row.get("player1") and match_row.get("player2"):
+            rows.append(prediction_pick_row(match_row, first_set_line, total_points_line, sets_line))
+    pred_df = apply_pick_strengths(pd.DataFrame(rows))
+
+    if pred_df.empty:
+        st.warning("No upcoming official Setka matches returned right now.")
+        st.stop()
+
+    min_confidence_threshold = min_ml_confidence / 100.0
+
+    filtered = pred_df.copy()
+    # Confidence filter: only show picks where model confidence >= threshold
+    filtered = filtered.loc[
+        filtered["winner_raw_probability"].fillna(0) >= min_confidence_threshold
+    ].copy()
+    if show_only_strong:
+        filtered = filtered.loc[
+            (filtered["winner_strength"].isin(["Strong", "Medium"]))
+            | (filtered["sets_strength"].isin(["Strong", "Medium"]))
+        ]
+    if hide_high_upset:
+        filtered = filtered.loc[~((filtered["best_market"] == "Winner") & (filtered["upset_risk"] == "High"))]
+    if hide_broken_markets:
+        # Zero out broken market probabilities so they never appear as best market
+        for _col in ["total_probability", "first_set_probability",
+                     "total_strength", "first_set_strength"]:
+            filtered[_col] = 0.0 if _col in filtered else None
+        filtered = filtered.loc[
+            filtered["best_market"].isin(["Winner", "Sets"])
+        ].copy() if "best_market" in filtered.columns else filtered
+
+    top_cols = st.columns(5)
+    top_cols[0].metric("Official matches", f"{len(upcoming):,}")
+    top_cols[1].metric("Shown after filter", f"{len(filtered):,}")
+    top_cols[2].metric("Strong best picks", f"{(pred_df['best_strength'] == 'Strong').sum():,}")
+    top_cols[3].metric("High confidence", f"{(pred_df['confidence'] == 'High').sum():,}")
+    top_cols[4].metric("Avg H2H", f"{pred_df['h2h_matches'].mean():.1f}")
+
+    st.subheader("Best picks cards")
+    best_cards = filtered.sort_values(["best_probability", "winner_probability"], ascending=False)
+    render_mobile_pick_cards(best_cards, limit=8)
+
+    display_cols = [
+        "time_lagos",
+        "location",
+        "match",
+        "best_market",
+        "best_pick",
+        "best_probability",
+        "best_strength",
+        "best_market_confidence",
+        "winner_agreement",
+        "match_fatigue_risk",
+        "winner_pick",
+        "winner_probability",
+        "winner_strength",
+        "sets_pick",
+        "sets_probability",
+        "sets_strength",
+        "expected_sets_played",
+        "confidence",
+        "upset_risk",
+        "h2h_matches",
+        "match_id",
+    ]
+    st.subheader("Full live prediction board")
+    st.dataframe(format_prediction_table(filtered[display_cols]), use_container_width=True, height=560)
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button(
+            "Download live predictions CSV",
+            data=pred_df.to_csv(index=False).encode("utf-8"),
+            file_name="setka_live_predictions.csv",
+            mime="text/csv",
+        )
+    with dl2:
+        if st.button("Save snapshot in this session"):
+            old = st.session_state.get("prediction_snapshots", pd.DataFrame())
+            st.session_state["prediction_snapshots"] = pd.concat([old, pred_df], ignore_index=True)
+            st.success(f"Saved {len(pred_df)} rows in this browser session.")
+
+    if "prediction_snapshots" in st.session_state and not st.session_state["prediction_snapshots"].empty:
+        with st.expander("Session prediction snapshots", expanded=False):
+            st.dataframe(format_prediction_table(st.session_state["prediction_snapshots"].tail(100)), use_container_width=True)
+            st.download_button(
+                "Download session snapshots CSV",
+                data=st.session_state["prediction_snapshots"].to_csv(index=False).encode("utf-8"),
+                file_name="setka_prediction_snapshots.csv",
+                mime="text/csv",
+            )
+
+    s1, s2, s3, s4 = st.columns(4)
+    with s1:
+        st.subheader("Strong winners")
+        st.dataframe(
+            format_prediction_table(pred_df.sort_values("winner_probability", ascending=False).head(7)[["time_lagos", "match", "winner_pick", "winner_probability", "upset_risk"]]),
+            use_container_width=True,
+        )
+    with s2:
+        st.subheader("Strong sets")
+        st.dataframe(
+            format_prediction_table(pred_df.sort_values("sets_probability", ascending=False).head(7)[["time_lagos", "match", "sets_pick", "sets_probability", "expected_sets_played"]]),
+            use_container_width=True,
+        )
+    with s3:
+        st.markdown(
+            "<div style='opacity:0.5;'>"
+            "<h4>⚠️ Total Points — disabled (R²=0.02)</h4>"
+            "<p style='color:#94A3B8; font-size:0.85rem;'>Non-predictive — hidden until model improves.</p>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    with s4:
+        st.markdown(
+            "<div style='opacity:0.5;'>"
+            "<h4>⚠️ 1st Set Points — disabled (R²=0.00)</h4>"
+            "<p style='color:#94A3B8; font-size:0.85rem;'>Non-predictive — hidden until model improves.</p>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.caption("Analytical estimates only — not guaranteed results or betting advice.")
+
+
+elif page == "Live Match Center":
+    st.title("📺 Live Match Center")
+    st.markdown("Follow Setka matches currently being played: live score, set score, active player, and official viewing links.")
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    with st.sidebar:
+        st.divider()
+        st.caption("Live match center")
+        live_auto_refresh = st.checkbox("Auto-refresh live scores", value=False)
+        live_refresh_seconds = st.selectbox("Live refresh every", [10, 15, 30, 60], index=1)
+    if live_auto_refresh:
+        enable_browser_auto_refresh(live_refresh_seconds)
+
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        if st.button("Refresh live scores", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+    with c2:
+        st.link_button("Watch/Open official Setka site", OFFICIAL_SETKA_URL)
+    with c3:
+        st.caption("If the official stream is available in your region, use the official Setka link. We do not re-host or bypass live video restrictions.")
+
+    try:
+        live_df = load_official_live()
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    if live_df.empty:
+        st.info("No live Setka matches returned right now. Showing upcoming matches below.")
+        try:
+            upcoming_now = load_official_nearest().head(12)
+            st.dataframe(upcoming_now[[c for c in ["start_time_lagos", "location", "player1", "player2", "match_id"] if c in upcoming_now.columns]], use_container_width=True)
+        except Exception:
+            pass
+        st.stop()
+
+    live_df = live_df.copy()
+    live_df["match"] = live_df["player1"] + " vs " + live_df["player2"]
+    live_df["current_score"] = live_df["player1_score"].fillna(0).astype(int).astype(str) + " - " + live_df["player2_score"].fillna(0).astype(int).astype(str)
+    live_df["watch_link"] = OFFICIAL_SETKA_URL
+    live_df["schedule_link"] = live_df.apply(
+        lambda r: f"https://tabletennis.setkacup.com/en/schedule?hall={int(r['location_id']) if pd.notna(r.get('location_id')) else ''}&period={int(r['day_period']) if pd.notna(r.get('day_period')) else ''}&date={r.get('start_date_lagos', '')}",
+        axis=1,
+    )
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Live feed rows", f"{len(live_df):,}")
+    k2.metric("Currently live", f"{(live_df['status'] == 'Live').sum():,}" if "status" in live_df else "-")
+    k3.metric("With set score", f"{live_df['set_scores'].astype(str).ne('').sum():,}" if "set_scores" in live_df else "-")
+    k4.metric("Last refresh", pd.Timestamp.now(tz="Africa/Lagos").strftime("%H:%M:%S"))
+
+    st.subheader("Live / just-finished feed")
+    for _, r in live_df.sort_values(["start_time_lagos", "location"]).iterrows():
+        st.markdown(
+            f"""
+<div class="pick-card">
+  <div class="pick-title">🔴 {r.get('start_time_lagos', '')} • {r.get('match', '')}</div>
+  <div class="pick-meta">{r.get('location', '')} • {r.get('tournament', '')} • Match ID {r.get('match_id', '')}</div>
+  <div><b>Score:</b> {r.get('current_score', '')} &nbsp; | &nbsp; <b>Sets:</b> {r.get('set_scores', '') or 'In progress'} &nbsp; | &nbsp; <b>Active:</b> {r.get('active_player', '') or '-'}</div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+    cols = ["start_time_lagos", "location", "status", "match", "current_score", "set_scores", "active_player", "total_points", "first_set_total", "match_id"]
+    st.dataframe(live_df[[c for c in cols if c in live_df.columns]], use_container_width=True, height=420)
+
+    st.subheader("Official viewing links")
+    st.write("Use these buttons to open the official Setka site/schedule. Live video availability depends on Setka and your region.")
+    link_rows = live_df[["match", "watch_link", "schedule_link"]].head(10)
+    st.dataframe(link_rows, use_container_width=True)
+    st.download_button(
+        "Download live scores CSV",
+        data=live_df.to_csv(index=False).encode("utf-8"),
+        file_name="setka_live_scores.csv",
+        mime="text/csv",
+    )
+
+
+elif page == "Owner Edge Engine":
+    st.title("💎 Owner Edge Engine")
+    st.markdown("A strict Setka-only control room: fewer picks, minimum value odds, no-bet discipline, and bankroll caps.")
+    st.warning("This engine is built to reject weak matches. It cannot guarantee profit; the edge is in filtering and refusing bad prices.")
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    o1, o2, o3, o4, o5, o6 = st.columns([1, 1, 1, 1, 1, 1])
+    with o1:
+        owner_bankroll = st.number_input("Bankroll", min_value=0.0, value=10000.0, step=500.0, key="owner_bankroll")
+    with o2:
+        max_risk_pct = st.slider("Max stake %", 0.25, 5.0, 1.0, 0.25, key="owner_risk") / 100
+    with o3:
+        edge_buffer = st.slider("Required edge buffer", 1, 10, 3, 1, key="owner_edge_buffer") / 100
+    with o4:
+        owner_limit = st.slider("Matches to scan", 5, 50, 25, 5, key="owner_scan")
+    with o5:
+        owner_min_conf = st.slider("Min confidence %", 50, 95, 65, 1, key="owner_min_conf")
+    with o6:
+        if st.button("Refresh engine", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+
+    l1, l2, l3 = st.columns(3)
+    with l1:
+        owner_first_line = st.number_input("1st set line", 10.5, 35.5, 18.5, 0.5, key="owner_first_line")
+    with l2:
+        owner_total_line = st.number_input("Total line", 30.5, 140.5, 75.5, 0.5, key="owner_total_line")
+    with l3:
+        owner_sets_line = st.selectbox("Sets line", [3.5, 4.5], index=0, key="owner_sets_line")
+
+    try:
+        upcoming = load_official_nearest().head(owner_limit)
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    rows = []
+    for _, match_row in upcoming.iterrows():
+        if match_row.get("player1") and match_row.get("player2"):
+            rows.append(prediction_pick_row(match_row, owner_first_line, owner_total_line, owner_sets_line))
+    edge_df = apply_pick_strengths(pd.DataFrame(rows))
+    if edge_df.empty:
+        st.warning("No official Setka matches available right now.")
+        st.stop()
+
+    owner_min_conf_threshold = owner_min_conf / 100.0
+    edge_df["edge_score"] = edge_df.apply(owner_edge_score, axis=1)
+    edge_df["owner_decision"] = edge_df.apply(
+        lambda r: "NO BET" if r.get("winner_raw_probability", 0) < owner_min_conf_threshold else owner_decision(r),
+        axis=1,
+    )
+    edge_df["reason"] = edge_df.apply(owner_reason, axis=1)
+    edge_df["fair_odds"] = edge_df["best_probability"].map(fair_decimal)
+    edge_df["minimum_value_odds"] = edge_df["best_probability"].map(lambda p: minimum_value_odds(p, edge_buffer))
+    edge_df["max_suggested_stake"] = edge_df.apply(
+        lambda r: 0.0 if r["owner_decision"] == "NO BET" else min(owner_bankroll * max_risk_pct, owner_bankroll * max(0.0025, (r["edge_score"] - 0.58) / 18)),
+        axis=1,
+    )
+
+    green = edge_df.loc[edge_df["owner_decision"] == "GREEN"].sort_values("edge_score", ascending=False)
+    watch = edge_df.loc[edge_df["owner_decision"] == "WATCH"].sort_values("edge_score", ascending=False)
+    auto_saved_owner_green = save_strong_picks_to_tracker(green, "Owner Edge Engine Auto") if not green.empty else 0
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Matches scanned", f"{len(edge_df):,}")
+    k2.metric("GREEN", f"{len(green):,}")
+    k3.metric("WATCH", f"{len(watch):,}")
+    k4.metric("NO BET", f"{(edge_df['owner_decision'] == 'NO BET').sum():,}")
+
+    st.subheader("GREEN picks — only if real odds are equal/above minimum value odds")
+    cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "fair_odds", "minimum_value_odds", "max_suggested_stake", "best_market_confidence", "winner_agreement", "match_fatigue_risk", "confidence", "upset_risk", "h2h_matches", "reason"]
+    green_display = green[cols].copy()
+    for c in ["best_probability", "edge_score"]:
+        green_display[c] = green_display[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+    for c in ["fair_odds", "minimum_value_odds", "max_suggested_stake"]:
+        green_display[c] = green_display[c].map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+    if green_display.empty:
+        st.info("No GREEN picks right now. That is intentional: the owner engine protects bankroll by waiting.")
+    else:
+        if auto_saved_owner_green:
+            st.success(f"Auto-saved {auto_saved_owner_green} new GREEN pick(s) to Strong Pick Tracker and Bankroll Journal.")
+        st.dataframe(green_display, use_container_width=True, height=320)
+        if st.button("Force save GREEN picks again", key="save_owner_green"):
+            count = save_strong_picks_to_tracker(green, "Owner Edge Engine")
+            st.success(f"Saved {count} new GREEN picks to Strong Pick Tracker.")
+
+    with st.expander("Full decision board: WATCH and NO BET", expanded=False):
+        full_cols = ["time_lagos", "location", "match", "best_market", "best_pick", "best_probability", "edge_score", "owner_decision", "minimum_value_odds", "best_market_confidence", "winner_agreement", "match_fatigue_risk", "confidence", "upset_risk", "upset_risk_flags", "reason"]
+        full = edge_df[full_cols].sort_values(["owner_decision", "edge_score"], ascending=[True, False]).copy()
+        for c in ["best_probability", "edge_score"]:
+            full[c] = full[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+        full["minimum_value_odds"] = full["minimum_value_odds"].map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+        st.dataframe(full, use_container_width=True, height=520)
+
+    st.download_button(
+        "Download owner edge report CSV",
+        data=edge_df.to_csv(index=False).encode("utf-8"),
+        file_name="owner_edge_report.csv",
+        mime="text/csv",
+    )
+
+    st.caption("Owner rule: if bookmaker odds are below minimum value odds, it is a NO BET even if the model likes the pick.")
+
+
+elif page == "Strong Pick Tracker":
+    st.title("📌 Strong Pick Tracker")
+    st.markdown("Automatically grades only GREEN/strong picks saved from the Trading Desk or Owner Edge Engine. It checks official Setka results for the saved pick dates — no weak picks mixed in.")
+    if github_storage_enabled():
+        storage_branch = os.getenv("GITHUB_STORAGE_BRANCH", "app-storage")
+        st.success(f"Permanent GitHub storage is active on branch `{storage_branch}`. Strong picks, results, and journal records should persist across refresh/redeploy until reset.")
+        if storage_branch == "main":
+            st.warning("Storage is set to main. Use `app-storage` branch to avoid Streamlit redeploying every time a pick is saved.")
+    else:
+        st.error("Permanent GitHub storage is NOT configured. History may disappear on reboot/redeploy. Add GITHUB_STORAGE_TOKEN, GITHUB_STORAGE_REPO, GITHUB_STORAGE_BRANCH=app-storage in Streamlit secrets.")
+
+    tracker = load_strong_picks()
+    session_tracker = st.session_state.get("strong_pick_tracker", pd.DataFrame())
+    if not session_tracker.empty:
+        tracker = save_strong_picks(session_tracker)
+
+    upload = st.file_uploader("Optional: upload a previously downloaded strong-picks CSV", type=["csv"], key="strong_tracker_upload")
+    if upload is not None:
+        try:
+            uploaded_tracker = pd.read_csv(upload)
+            tracker = save_strong_picks(uploaded_tracker)
+            st.success(f"Loaded and saved {len(uploaded_tracker):,} uploaded strong picks.")
+        except Exception as exc:
+            st.exception(exc)
+
+    if tracker.empty:
+        st.info("No strong picks saved yet. You can generate current GREEN picks now, or go to Setka Trading Desk / Owner Edge Engine and save GREEN picks.")
+        if st.button("Generate current GREEN picks now", type="primary"):
+            try:
+                upcoming_now = load_official_nearest().head(30)
+                rows_now = []
+                for _, match_row in upcoming_now.iterrows():
+                    if match_row.get("player1") and match_row.get("player2"):
+                        rows_now.append(prediction_pick_row(match_row, 18.5, 75.5, 3.5))
+                now_df = apply_pick_strengths(pd.DataFrame(rows_now))
+                if not now_df.empty:
+                    now_df["edge_score"] = now_df.apply(owner_edge_score, axis=1)
+                    now_df["owner_decision"] = now_df.apply(owner_decision, axis=1)
+                    now_df["reason"] = now_df.apply(owner_reason, axis=1)
+                    now_df["fair_odds"] = now_df["best_probability"].map(fair_decimal)
+                    now_df["minimum_value_odds"] = now_df["best_probability"].map(lambda p: minimum_value_odds(p, 0.03))
+                    green_now = now_df.loc[now_df["owner_decision"] == "GREEN"].copy()
+                    if green_now.empty:
+                        st.warning("No GREEN picks right now. The tracker did not save weak picks.")
+                    else:
+                        save_strong_picks_to_tracker(green_now, "Strong Pick Tracker Auto-Generate")
+                        st.success(f"Saved {len(green_now)} current GREEN picks. Reopening tracker...")
+                        st.rerun()
+                else:
+                    st.warning("No upcoming matches returned right now.")
+            except Exception as exc:
+                st.exception(exc)
+        st.stop()
+
+    today_lagos = pd.Timestamp.now(tz="Africa/Lagos").date()
+    c1, c2, c3 = st.columns([1, 1.2, 1.2])
+    with c1:
+        auto_check_dates = st.checkbox("Auto-check saved pick dates", value=True)
+    with c2:
+        track_date = st.date_input("Manual result date", value=today_lagos, key="strong_track_date")
+    with c3:
+        if st.button("Check now", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+
+    track = tracker.copy()
+    if "match_id" in track.columns:
+        track["match_id"] = pd.to_numeric(track["match_id"], errors="coerce")
+
+    dates_to_check = tracker_result_dates(track, track_date) if auto_check_dates else expand_setka_result_dates([str(track_date)])
+
+    result_df = fetch_tracker_results(track, track_date) if auto_check_dates else sync_official_results_for_dates(dates_to_check)
+    if result_df.empty:
+        st.warning("No official results returned yet for the saved pick dates.")
+        st.stop()
+
+    if "match_id" in track.columns:
+        track["match_id"] = pd.to_numeric(track["match_id"], errors="coerce")
+        track = track.dropna(subset=["match_id"]).copy()
+        track["match_id"] = track["match_id"].astype("int64")
+
+    result_for_merge = result_df.copy()
+    if "match_id" in result_for_merge.columns:
+        result_for_merge["match_id"] = pd.to_numeric(result_for_merge["match_id"], errors="coerce")
+        result_for_merge = result_for_merge.dropna(subset=["match_id"]).copy()
+        result_for_merge["match_id"] = result_for_merge["match_id"].astype("int64")
+    result_for_merge["actual_match"] = result_for_merge["player1"] + " vs " + result_for_merge["player2"]
+    merged = track.merge(result_for_merge, on="match_id", how="left", suffixes=("_pick", "_result"))
+
+    grades = merged.apply(grade_best_pick, axis=1, result_type="expand")
+    merged["best_pick_grade"] = grades[0]
+    merged["actual_best_market_result"] = grades[1]
+    journal_updates = update_journal_from_graded_picks(merged)
+
+    finished = merged.loc[merged["best_pick_grade"].isin(["✅", "❌"])]
+    wins = int((finished["best_pick_grade"] == "✅").sum()) if not finished.empty else 0
+    losses = int((finished["best_pick_grade"] == "❌").sum()) if not finished.empty else 0
+    pending = int((merged["best_pick_grade"] == "Pending").sum())
+    accuracy = wins / len(finished) if len(finished) else None
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Tracked picks", f"{len(merged):,}")
+    m2.metric("Won", f"{wins:,}")
+    m3.metric("Lost", f"{losses:,}")
+    m4.metric("Pending", f"{pending:,}")
+    m5.metric("Strong-pick accuracy", format_percent(accuracy) if accuracy is not None else "-")
+    matched_count = int(merged["status"].notna().sum()) if "status" in merged.columns else 0
+    st.caption(f"Auto-checked official Setka result date(s): {', '.join(dates_to_check)} | Result rows found: {len(result_df):,} | Matched tracked picks: {matched_count:,} | Journal auto-updates: {journal_updates:,}")
+    if pending:
+        st.info("Pending means the match has not finished yet, or the official result has not appeared in the Setka feed. The tracker now checks a wider ±3 day Setka window plus the live widget.")
+        unmatched = merged.loc[merged.get("status", pd.Series(index=merged.index)).isna(), [c for c in ["match_id", "time_lagos", "match", "best_market", "best_pick", "date_lagos"] if c in merged.columns]]
+        if not unmatched.empty:
+            with st.expander("Debug: unmatched saved picks", expanded=False):
+                st.dataframe(unmatched, use_container_width=True)
+
+    st.subheader("Strong pick results")
+    cols = [
+        "saved_at_lagos", "tracker_source", "time_lagos", "location_pick", "match", "best_market", "best_pick",
+        "best_probability", "minimum_value_odds", "stake_cap", "max_suggested_stake", "confidence", "upset_risk",
+        "status", "winner", "set_scores", "total_points", "first_set_total", "sets_played",
+        "actual_best_market_result", "best_pick_grade", "match_id"
+    ]
+    visible = merged[[c for c in cols if c in merged.columns]].copy()
+    for c in ["best_probability"]:
+        if c in visible:
+            visible[c] = visible[c].map(lambda x: f"{x:.1%}" if pd.notna(x) and not isinstance(x, str) else x)
+    st.dataframe(visible, use_container_width=True, height=520)
+
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button("Download tracked strong picks CSV", tracker.to_csv(index=False).encode("utf-8"), "strong_picks_saved.csv", "text/csv")
+    with dl2:
+        st.download_button("Download graded results CSV", merged.to_csv(index=False).encode("utf-8"), "strong_picks_graded.csv", "text/csv")
+
+    st.caption(f"Strong picks are saved in: `{STRONG_PICKS_FILE}`. Synced official results are saved in: `{DAILY_RESULTS_FILE}`.")
+    col_reset1, col_reset2 = st.columns(2)
+    with col_reset1:
+        if st.button("Reset strong picks permanently"):
+            reset_strong_picks()
+            st.session_state["strong_pick_tracker"] = pd.DataFrame()
+            st.success("Strong Pick Tracker reset.")
+            st.rerun()
+    with col_reset2:
+        if st.button("Reset saved daily results"):
+            reset_daily_results()
+            st.success("Saved daily results reset.")
+            st.rerun()
+
+
+elif page == "Bankroll Journal":
+    st.title("💰 Bankroll Journal")
+    st.markdown("Track actual money performance from strong picks: stake, odds taken, result, profit/loss, ROI, and daily discipline.")
+
+    journal = load_bankroll_journal()
+    strong_picks = load_strong_picks()
+
+    if github_storage_enabled():
+        st.success(f"Permanent storage active. Journal file: `{BANKROLL_JOURNAL_FILE.name}`")
+    else:
+        st.warning("Permanent GitHub storage is not configured. Journal may reset on Streamlit redeploy. Add GitHub storage secrets for permanence.")
+
+    st.subheader("Add bet record")
+    source_options = ["Manual entry"]
+    pick_lookup = {}
+    if not strong_picks.empty:
+        strong_picks = strong_picks.copy()
+        strong_picks["pick_label"] = strong_picks.apply(
+            lambda r: f"{r.get('time_lagos', '')} | {r.get('match', '')} | {r.get('best_market', '')}: {r.get('best_pick', '')} | ID {r.get('match_id', '')}",
+            axis=1,
+        )
+        source_options.extend(strong_picks["pick_label"].tail(100).tolist())
+        pick_lookup = {r["pick_label"]: r for _, r in strong_picks.iterrows()}
+
+    j1, j2 = st.columns([2, 1])
+    with j1:
+        selected_pick = st.selectbox("Select saved strong pick or manual", source_options)
+    with j2:
+        bet_date = st.date_input("Bet date", value=pd.Timestamp.now(tz="Africa/Lagos").date(), key="journal_date")
+
+    selected_row = pick_lookup.get(selected_pick)
+    default_match = selected_row.get("match", "") if selected_row is not None else ""
+    default_market = selected_row.get("best_market", "") if selected_row is not None else ""
+    default_pick = selected_row.get("best_pick", "") if selected_row is not None else ""
+    default_match_id = selected_row.get("match_id", "") if selected_row is not None else ""
+
+    f1, f2, f3, f4 = st.columns(4)
+    with f1:
+        journal_match = st.text_input("Match", value=str(default_match))
+    with f2:
+        journal_market = st.text_input("Market", value=str(default_market))
+    with f3:
+        journal_pick = st.text_input("Pick", value=str(default_pick))
+    with f4:
+        journal_match_id = st.text_input("Match ID", value=str(default_match_id))
+
+    b1, b2, b3, b4 = st.columns(4)
+    with b1:
+        stake = st.number_input("Stake", min_value=0.0, value=0.0, step=100.0)
+    with b2:
+        odds_taken = st.number_input("Odds taken", min_value=1.01, value=1.80, step=0.01)
+    with b3:
+        result = st.selectbox("Result", ["Pending", "Won", "Lost", "Void"], index=0)
+    with b4:
+        bookmaker = st.text_input("Bookmaker", value="")
+
+    profit_loss = bet_profit_loss(stake, odds_taken, result)
+    edge_note = ""
+    if selected_row is not None and pd.notna(selected_row.get("minimum_value_odds")):
+        try:
+            min_odds = float(selected_row.get("minimum_value_odds"))
+            edge_note = "Value odds met" if odds_taken >= min_odds else f"Below min value odds ({min_odds:.2f})"
+        except Exception:
+            edge_note = ""
+
+    preview_cols = st.columns(3)
+    preview_cols[0].metric("Profit/Loss", "Pending" if profit_loss is None else f"{profit_loss:,.2f}")
+    preview_cols[1].metric("Value check", edge_note or "-")
+    preview_cols[2].metric("Potential payout", f"{stake * odds_taken:,.2f}" if stake else "-")
+
+    if st.button("Save bet to journal", type="primary"):
+        journal_id = f"{pd.Timestamp.now(tz='Africa/Lagos').strftime('%Y%m%d%H%M%S')}-{journal_match_id}-{journal_market}-{journal_pick}"
+        new_record = pd.DataFrame([
+            {
+                "journal_id": journal_id,
+                "date": str(bet_date),
+                "saved_at_lagos": pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S"),
+                "match_id": journal_match_id,
+                "match": journal_match,
+                "market": journal_market,
+                "pick": journal_pick,
+                "stake": stake,
+                "odds_taken": odds_taken,
+                "result": result,
+                "profit_loss": profit_loss,
+                "bookmaker": bookmaker,
+                "value_note": edge_note,
+                "source": "strong_pick" if selected_row is not None else "manual",
+            }
+        ])
+        journal = save_bankroll_journal(new_record)
+        st.success("Saved bet to bankroll journal.")
+
+    st.divider()
+    journal = load_bankroll_journal()
+    summary = journal_summary(journal)
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Bets", f"{summary['bets']:,}")
+    m2.metric("Settled", f"{summary['settled']:,}")
+    m3.metric("Total staked", f"{summary['staked']:,.2f}")
+    m4.metric("P/L", f"{summary['profit']:,.2f}")
+    m5.metric("ROI", format_percent(summary["roi"]) if summary["roi"] is not None else "-")
+
+    if not journal.empty:
+        view = journal.copy()
+        view["stake"] = pd.to_numeric(view.get("stake"), errors="coerce")
+        view["profit_loss"] = pd.to_numeric(view.get("profit_loss"), errors="coerce")
+        st.subheader("Journal records")
+        st.dataframe(view.sort_values("saved_at_lagos", ascending=False), use_container_width=True, height=460)
+
+        if "date" in view.columns and view["profit_loss"].notna().any():
+            daily = view.dropna(subset=["profit_loss"]).groupby("date", as_index=False).agg(
+                stake=("stake", "sum"), profit_loss=("profit_loss", "sum"), bets=("journal_id", "count")
+            )
+            st.plotly_chart(px.bar(daily, x="date", y="profit_loss", title="Daily P/L"), use_container_width=True)
+
+        cdl, crs = st.columns(2)
+        with cdl:
+            st.download_button("Download bankroll journal CSV", journal.to_csv(index=False).encode("utf-8"), "bankroll_journal.csv", "text/csv")
+        with crs:
+            if st.button("Reset bankroll journal permanently"):
+                reset_bankroll_journal()
+                st.success("Bankroll journal reset.")
+                st.rerun()
+    else:
+        st.info("No bankroll journal records yet.")
+
+
+elif page == "Results Checker":
+    st.title("✅ Results Checker")
+    st.markdown("Check official Setka results, live scores, set totals, and grade stored prediction snapshots.")
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    with st.sidebar:
+        st.divider()
+        st.caption("Results refresh")
+        results_auto_refresh = st.checkbox("Auto-refresh results page", value=False)
+        results_refresh_seconds = st.selectbox("Results refresh every", [15, 30, 60, 120], index=1)
+    if results_auto_refresh:
+        enable_browser_auto_refresh(results_refresh_seconds)
+
+    today_lagos = pd.Timestamp.now(tz="Africa/Lagos").date()
+    c1, c2, c3 = st.columns([1, 1, 1.4])
+    with c1:
+        result_date = st.date_input("Setka date", value=today_lagos)
+    with c2:
+        period_label = st.selectbox("Day period", ["All", "Morning", "Evening", "Night"], index=0)
+        period_map = {"All": None, "Morning": 1, "Evening": 2, "Night": 3}
+    with c3:
+        if st.button("Refresh results", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+
+    try:
+        result_df = load_official_results(str(result_date), period_map[period_label])
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    if result_df.empty:
+        st.warning("No official result rows returned for that date/period.")
+        st.stop()
+
+    # Persist official results whenever this page is opened/refreshed.
+    saved_results = save_daily_results(result_df.assign(synced_at_lagos=pd.Timestamp.now(tz="Africa/Lagos").strftime("%Y-%m-%d %H:%M:%S")))
+
+    rcols = st.columns(4)
+    rcols[0].metric("Matches", f"{len(result_df):,}")
+    rcols[1].metric("Finished", f"{(result_df['status'] == 'Finished').sum():,}")
+    rcols[2].metric("Live", f"{(result_df['status'] == 'Live').sum():,}")
+    rcols[3].metric("Scheduled", f"{(result_df['status'] == 'Scheduled').sum():,}")
+    st.caption(f"Auto-saved official result rows in local app storage: {len(saved_results):,}")
+
+    st.subheader("Official result feed")
+    filter_text = st.text_input("Search player/location/match id", value="")
+    view = result_df.copy()
+    view["match"] = view["player1"] + " vs " + view["player2"]
+    if filter_text:
+        needle = filter_text.lower().strip()
+        view = view.loc[
+            view.apply(lambda r: needle in " ".join(str(v).lower() for v in r.values), axis=1)
+        ]
+    cols = ["start_time_lagos", "location", "status", "match", "player1_score", "player2_score", "winner", "set_scores", "total_points", "first_set_total", "match_id"]
+    st.dataframe(view[[c for c in cols if c in view.columns]], use_container_width=True, height=430)
+
+    with st.expander("Grade former prediction snapshot", expanded=True):
+        st.caption("This grades the earlier predictions we generated in this chat for the first Setka night matches.")
+        graded_rows = []
+        for match_id, pred in FORMER_PREDICTIONS.items():
+            row_match = result_df.loc[result_df["match_id"] == match_id]
+            if row_match.empty:
+                graded_rows.append({"match_id": match_id, **pred, "status": "Not found today"})
+                continue
+            row = row_match.iloc[0]
+            actual_total = None
+            if pd.notna(row.get("total_points")):
+                actual_total = "Over" if row["total_points"] > 75.5 else "Under"
+            actual_first = None
+            if pd.notna(row.get("first_set_total")):
+                actual_first = "Over" if row["first_set_total"] > 18.5 else "Under"
+            graded_rows.append(
+                {
+                    "match_id": match_id,
+                    "time_lagos": row.get("start_time_lagos"),
+                    "match": f"{row.get('player1')} vs {row.get('player2')}",
+                    "status": row.get("status"),
+                    "score": f"{row.get('player1_score')} - {row.get('player2_score')}",
+                    "sets": row.get("set_scores"),
+                    "winner_pick": pred["winner_pick"],
+                    "actual_winner": row.get("winner") or None,
+                    "winner_grade": grade_pick(pred["winner_pick"], row.get("winner") or None),
+                    "total_pick": pred["total_pick"],
+                    "actual_total_pick": actual_total,
+                    "total_points": row.get("total_points"),
+                    "total_grade": grade_pick(pred["total_pick"], actual_total),
+                    "first_set_pick": pred["first_set_pick"],
+                    "actual_first_set_pick": actual_first,
+                    "first_set_total": row.get("first_set_total"),
+                    "first_set_grade": grade_pick(pred["first_set_pick"], actual_first),
+                }
+            )
+        graded = pd.DataFrame(graded_rows)
+        st.dataframe(graded, use_container_width=True)
+        finished = graded.loc[graded["actual_winner"].notna()] if "actual_winner" in graded else pd.DataFrame()
+        if not finished.empty:
+            win_acc = (finished["winner_grade"] == "✅").mean()
+            total_acc = (finished["total_grade"] == "✅").mean()
+            first_acc = (finished["first_set_grade"] == "✅").mean()
+            a1, a2, a3 = st.columns(3)
+            a1.metric("Winner accuracy", format_percent(win_acc))
+            a2.metric("Total accuracy", format_percent(total_acc))
+            a3.metric("1st-set accuracy", format_percent(first_acc))
+
+    with st.expander("Upload and grade your prediction CSV", expanded=False):
+        st.caption("Upload a CSV downloaded from Live Predictions. It must include match_id, winner_pick, total_pick, and first_set_pick columns.")
+        uploaded_predictions = st.file_uploader("Prediction CSV", type=["csv"], key="grade_prediction_csv")
+        if uploaded_predictions is not None:
+            try:
+                user_preds = pd.read_csv(uploaded_predictions)
+                needed = {"match_id", "winner_pick", "total_pick", "first_set_pick"}
+                missing = needed - set(user_preds.columns)
+                if missing:
+                    st.error(f"Missing columns: {', '.join(sorted(missing))}")
+                else:
+                    result_for_merge = result_df.copy()
+                    result_for_merge["actual_match"] = result_for_merge["player1"] + " vs " + result_for_merge["player2"]
+                    if "start_time_lagos" in result_for_merge.columns:
+                        result_for_merge = result_for_merge.rename(columns={"start_time_lagos": "actual_time_lagos"})
+                    merged = user_preds.merge(
+                        result_for_merge,
+                        on="match_id",
+                        how="left",
+                        suffixes=("_pred", "_actual"),
+                    )
+                    merged["actual_total_pick"] = merged["total_points"].map(
+                        lambda x: "Over" if pd.notna(x) and x > 75.5 else "Under" if pd.notna(x) else None
+                    )
+                    merged["actual_first_set_pick"] = merged["first_set_total"].map(
+                        lambda x: "Over" if pd.notna(x) and x > 18.5 else "Under" if pd.notna(x) else None
+                    )
+                    merged["winner_grade"] = merged.apply(lambda r: grade_pick(r.get("winner_pick"), r.get("winner")), axis=1)
+                    merged["total_grade"] = merged.apply(lambda r: grade_pick(r.get("total_pick"), r.get("actual_total_pick")), axis=1)
+                    merged["first_set_grade"] = merged.apply(lambda r: grade_pick(r.get("first_set_pick"), r.get("actual_first_set_pick")), axis=1)
+                    out_cols = [
+                        "match_id",
+                        "time_lagos",
+                        "actual_time_lagos",
+                        "location_pred",
+                        "location_actual",
+                        "match",
+                        "actual_match",
+                        "status",
+                        "winner_pick",
+                        "winner",
+                        "winner_grade",
+                        "total_pick",
+                        "actual_total_pick",
+                        "total_points",
+                        "total_grade",
+                        "first_set_pick",
+                        "actual_first_set_pick",
+                        "first_set_total",
+                        "first_set_grade",
+                    ]
+                    st.dataframe(merged[[c for c in out_cols if c in merged.columns]], use_container_width=True)
+                    finished_upload = merged.loc[merged["winner"].notna()]
+                    if not finished_upload.empty:
+                        u1, u2, u3 = st.columns(3)
+                        u1.metric("Winner accuracy", format_percent((finished_upload["winner_grade"] == "✅").mean()))
+                        u2.metric("Total accuracy", format_percent((finished_upload["total_grade"] == "✅").mean()))
+                        u3.metric("1st-set accuracy", format_percent((finished_upload["first_set_grade"] == "✅").mean()))
+            except Exception as exc:
+                st.exception(exc)
+
+
+elif page == "Match Predictor": 
+    st.title("🏓 Match Predictor")
+    st.markdown(
+        "Estimate match winner, expected total points, and **first set Over/Under 18.5** from the Setka history."
+    )
+
+    c1, c2, c3, c4, c5 = st.columns([2.2, 2.2, 1.1, 1.1, 1.0])
+    with c1:
+        player_a = st.selectbox("Player A", players_by_elo, index=0)
+    with c2:
+        default_b = 1 if len(players_by_elo) > 1 else 0
+        player_b = st.selectbox("Player B", players_by_elo, index=default_b)
+    with c3:
+        first_set_line = st.number_input(
+            "1st set line", min_value=10.5, max_value=35.5, value=18.5, step=0.5
+        )
+    with c4:
+        total_points_line = st.number_input(
+            "Total points line", min_value=30.5, max_value=140.5, value=75.5, step=0.5
+        )
+    with c5:
+        sets_line = st.selectbox("Sets line", [3.5, 4.5], index=0)
+
+    if player_a == player_b:
+        st.error("Choose two different players.")
+        st.stop()
+
+    ml_bundle = st.session_state.get("ml_bundle")
+    if ml_bundle is not None:
+        _ml = predict_with_bundle(
+            ml_bundle, player_a, player_b,
+            first_set_line=first_set_line,
+            total_points_line=total_points_line,
+            sets_line=sets_line,
+        )
+        pred = predict_match(
+            player_a, player_b,
+            player_stats, matches, global_stats,
+            first_set_line=first_set_line,
+            total_points_line=total_points_line,
+            sets_line=sets_line,
+        )
+        for _k in ("player_a_win_probability", "player_b_win_probability",
+                   "predicted_winner", "elo_probability", "elo_a", "elo_b", "elo_diff",
+                   "first_set_over_probability", "first_set_under_probability",
+                   "expected_first_set_points",
+                   "total_points_over_probability", "total_points_under_probability",
+                   "expected_total_points",
+                   "confidence", "confidence_score",
+                   "upset_risk", "upset_risk_flags"):
+            if _k in _ml:
+                pred[_k] = _ml[_k]
+    else:
+        pred = predict_match(
+            player_a,
+            player_b,
+            player_stats,
+            matches,
+            global_stats,
+            first_set_line=first_set_line,
+            total_points_line=total_points_line,
+            sets_line=sets_line,
+        )
+
+    st.divider()
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Predicted winner", pred["predicted_winner"])
+    m2.metric(f"{player_a} win chance", format_percent(pred["player_a_win_probability"]))
+    m3.metric(
+        f"1st set Over {first_set_line}",
+        format_percent(pred["first_set_over_probability"]),
+    )
+    m4.metric(
+        f"Sets Over {sets_line}",
+        format_percent(pred["sets_over_probability"]),
+    )
+    m5.metric("Upset risk", pred.get("upset_risk", "-"), help="Flags weak/conflicting winner picks.")
+
+    r1, r2, r3 = st.columns(3)
+    with r1:
+        st.plotly_chart(probability_bar(pred), use_container_width=True)
+    with r2:
+        st.plotly_chart(
+            over_under_bar(
+                f"1st set O/U {first_set_line}",
+                pred["first_set_over_probability"],
+                pred["first_set_under_probability"],
+            ),
+            use_container_width=True,
+        )
+    with r3:
+        st.plotly_chart(
+            over_under_bar(
+                f"Sets O/U {sets_line}",
+                pred["sets_over_probability"],
+                pred["sets_under_probability"],
+            ),
+            use_container_width=True,
+        )
+
+    line_cols = st.columns(5)
+    line_cols[0].metric("Expected 1st-set points", format_number(pred["expected_first_set_points"], 2))
+    line_cols[1].metric("Expected total points", format_number(pred["expected_total_points"], 2))
+    line_cols[2].metric("Expected sets", format_number(pred["expected_sets_played"], 2))
+    line_cols[3].metric(
+        f"Total Over {total_points_line}",
+        format_percent(pred["total_points_over_probability"]),
+    )
+    line_cols[4].metric(
+        f"Total Under {total_points_line}",
+        format_percent(pred["total_points_under_probability"]),
+    )
+
+    total_pick = "Over" if pred["total_points_over_probability"] >= pred["total_points_under_probability"] else "Under"
+    total_prob = max(pred["total_points_over_probability"], pred["total_points_under_probability"])
+    first_pick = "Over" if pred["first_set_over_probability"] >= pred["first_set_under_probability"] else "Under"
+    first_prob = max(pred["first_set_over_probability"], pred["first_set_under_probability"])
+    sets_pick = "Over" if pred["sets_over_probability"] >= pred["sets_under_probability"] else "Under"
+    sets_prob = max(pred["sets_over_probability"], pred["sets_under_probability"])
+    winner_prob = max(pred["player_a_win_probability"], pred["player_b_win_probability"])
+    st.info(
+        f"Pick strength → Winner: {pick_strength(winner_prob, pred['confidence'], pred.get('upset_risk'))} | "
+        f"Total: {total_pick} {pick_strength(total_prob, pred['confidence'], pred.get('upset_risk'))} | "
+        f"1st set: {first_pick} {pick_strength(first_prob, pred['confidence'], pred.get('upset_risk'))} | "
+        f"Sets: {sets_pick} {pick_strength(sets_prob, pred['confidence'], pred.get('upset_risk'))}"
+    )
+
+    with st.expander("Manual odds value check", expanded=False):
+        st.caption("Optional: compare your model probability with bookmaker decimal odds. Positive edge means model probability is higher than implied probability.")
+        odds_market = st.selectbox("Market", ["Winner", "Total", "1st Set", "Sets"], key="manual_odds_market")
+        if odds_market == "Winner":
+            model_probability = winner_prob
+            model_pick = pred["predicted_winner"]
+        elif odds_market == "Total":
+            model_probability = total_prob
+            model_pick = total_pick
+        elif odds_market == "1st Set":
+            model_probability = first_prob
+            model_pick = first_pick
+        else:
+            model_probability = sets_prob
+            model_pick = f"{sets_pick} {sets_line} sets"
+        decimal_odds = st.number_input("Decimal odds", min_value=1.01, max_value=50.0, value=1.80, step=0.01)
+        implied_probability = 1 / decimal_odds
+        edge = model_probability - implied_probability
+        ev = (model_probability * decimal_odds) - 1
+        o1, o2, o3, o4 = st.columns(4)
+        o1.metric("Model pick", model_pick)
+        o2.metric("Model probability", format_percent(model_probability))
+        o3.metric("Implied probability", format_percent(implied_probability))
+        o4.metric("Estimated edge", format_percent(edge), delta=format_percent(ev))
+
+    with st.expander("Why this prediction?", expanded=True):
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("Elo difference", f"{pred['elo_diff']:+.1f}")
+        d2.metric("Elo-only chance", format_percent(pred["elo_probability"]))
+        d3.metric("H2H matches", f"{pred['h2h_matches']}")
+        d4.metric(
+            f"{player_a} H2H wins",
+            f"{pred['h2h_player_a_wins']} / {pred['h2h_matches']}",
+        )
+        st.dataframe(comparison_table(player_stats, player_a, player_b), use_container_width=True)
+        st.caption(
+            "This is an analytical estimate, not a guarantee or financial advice. Use your own judgement."
+        )
+
+    st.subheader("Recent head-to-head matches")
+    if pred["h2h_table"].empty:
+        st.info("No direct head-to-head matches found in the uploaded history.")
+    else:
+        st.dataframe(h2h_display_table(pred["h2h_table"]), use_container_width=True)
+
+
+elif page == "Model Intelligence":
+    st.title("🧠 Model Intelligence")
+    st.markdown("See the hidden quality checks behind each Setka prediction: agreement, calibration, fatigue, market confidence, and reliability tags.")
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    i1, i2, i3, i4 = st.columns(4)
+    with i1:
+        intel_limit = st.slider("Upcoming matches", 5, 50, 20, 5, key="intel_limit")
+    with i2:
+        intel_first = st.number_input("1st set line", 10.5, 35.5, 18.5, 0.5, key="intel_first")
+    with i3:
+        intel_total = st.number_input("Total line", 30.5, 140.5, 75.5, 0.5, key="intel_total")
+    with i4:
+        intel_sets = st.selectbox("Sets line", [3.5, 4.5], index=0, key="intel_sets")
+
+    try:
+        upcoming = load_official_nearest().head(intel_limit)
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    rows = []
+    for _, match_row in upcoming.iterrows():
+        if match_row.get("player1") and match_row.get("player2"):
+            rows.append(prediction_pick_row(match_row, intel_first, intel_total, intel_sets))
+    intel_df = apply_pick_strengths(pd.DataFrame(rows))
+    if intel_df.empty:
+        st.warning("No matches available for intelligence scan.")
+        st.stop()
+    intel_df["edge_score"] = intel_df.apply(owner_edge_score, axis=1)
+    intel_df["decision"] = intel_df.apply(owner_decision, axis=1)
+    intel_df["reason"] = intel_df.apply(owner_reason, axis=1)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Avg agreement", format_percent(intel_df["winner_agreement_score"].mean()))
+    m2.metric("Elite/Strong markets", f"{intel_df['best_market_confidence'].isin(['Elite', 'Strong']).sum():,}")
+    m3.metric("High fatigue risk", f"{(intel_df['match_fatigue_risk'] == 'High').sum():,}")
+    m4.metric("GREEN decisions", f"{(intel_df['decision'] == 'GREEN').sum():,}")
+
+    cols = [
+        "time_lagos", "location", "match", "best_market", "best_pick", "best_probability",
+        "best_market_confidence", "winner_agreement", "winner_agreement_components",
+        "match_fatigue_risk", "player1_fatigue", "player2_fatigue",
+        "player1_reliability", "player2_reliability", "upset_risk", "decision", "reason", "match_id"
+    ]
+    view = intel_df[[c for c in cols if c in intel_df.columns]].copy()
+    if "best_probability" in view:
+        view["best_probability"] = view["best_probability"].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+    st.dataframe(view, use_container_width=True, height=620)
+    st.download_button("Download model intelligence CSV", intel_df.to_csv(index=False).encode("utf-8"), "setka_model_intelligence.csv", "text/csv")
+
+
+elif page == "Accuracy Lab":
+    st.title("🎯 Accuracy Lab")
+    st.markdown("Time-split backtesting for the Setka rule model. This helps us trust only the best filters instead of every pick.")
+
+    b1, b2, b3, b4, b5 = st.columns(5)
+    with b1:
+        test_rows = st.selectbox("Holdout matches", [250, 500, 750, 1000, 1500], index=2)
+    with b2:
+        bt_first_line = st.number_input("1st set line", 10.5, 35.5, 18.5, 0.5, key="bt_first")
+    with b3:
+        bt_total_line = st.number_input("Total line", 30.5, 140.5, 75.5, 0.5, key="bt_total")
+    with b4:
+        bt_sets_line = st.selectbox("Sets line", [3.5, 4.5], index=0, key="bt_sets")
+    with b5:
+        run_bt = st.button("Run backtest", type="primary")
+
+    if not run_bt and "backtest_df" not in st.session_state:
+        st.info("Click Run backtest to test recent historical Setka matches without using those match results for training.")
+        st.stop()
+
+    if run_bt:
+        bt_df, bt_metrics = run_backtest_cached(test_rows, bt_first_line, bt_total_line, bt_sets_line)
+        st.session_state["backtest_df"] = bt_df
+        st.session_state["backtest_metrics"] = bt_metrics
+    else:
+        bt_df = st.session_state["backtest_df"]
+        bt_metrics = st.session_state["backtest_metrics"]
+
+    if bt_df.empty:
+        st.warning("No backtest rows generated.")
+        st.stop()
+
+    a1, a2, a3, a4, a5 = st.columns(5)
+    a1.metric("Backtest rows", f"{bt_metrics.get('rows', 0):,}")
+    a2.metric("Winner accuracy", format_percent(bt_metrics.get("winner_accuracy")))
+    a3.metric("Total accuracy", format_percent(bt_metrics.get("total_accuracy")))
+    a4.metric("1st-set accuracy", format_percent(bt_metrics.get("first_set_accuracy")))
+    a5.metric("Sets O/U accuracy", format_percent(bt_metrics.get("sets_accuracy")))
+
+    st.subheader("Accuracy by probability threshold")
+    th = threshold_table(bt_df)
+    st.dataframe(
+        th.assign(
+            min_probability=th["min_probability"].map(lambda x: f"{x:.0%}"),
+            accuracy=th["accuracy"].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-"),
+        ),
+        use_container_width=True,
+    )
+
+    st.subheader("Recommended live filters from this test")
+    recommendations = []
+    for market, prob_col, correct_col in [
+        ("Winner", "winner_probability", "winner_correct"),
+        ("Total", "total_probability", "total_correct"),
+        ("1st Set", "first_set_probability", "first_set_correct"),
+        ("Sets", "sets_probability", "sets_correct"),
+    ]:
+        best = None
+        for threshold in [0.55, 0.58, 0.60, 0.65, 0.70]:
+            subset = bt_df.loc[bt_df[prob_col] >= threshold]
+            if len(subset) < max(20, len(bt_df) * 0.03):
+                continue
+            acc = subset[correct_col].mean()
+            candidate = (acc, threshold, len(subset))
+            if best is None or candidate[0] > best[0]:
+                best = candidate
+        if best:
+            recommendations.append({"market": market, "recommended_min_probability": best[1], "backtest_accuracy": best[0], "sample_picks": best[2]})
+    rec_df = pd.DataFrame(recommendations)
+    if not rec_df.empty:
+        st.dataframe(
+            rec_df.assign(
+                recommended_min_probability=rec_df["recommended_min_probability"].map(lambda x: f"{x:.0%}"),
+                backtest_accuracy=rec_df["backtest_accuracy"].map(lambda x: f"{x:.1%}"),
+            ),
+            use_container_width=True,
+        )
+
+    st.subheader("Recent backtest rows")
+    view = bt_df.sort_values("date_time", ascending=False).head(250).copy()
+    for col in ["winner_probability", "total_probability", "first_set_probability"]:
+        view[col] = view[col].map(lambda x: f"{x:.1%}")
+    st.dataframe(view, use_container_width=True, height=420)
+    st.download_button("Download backtest CSV", bt_df.to_csv(index=False).encode("utf-8"), "setka_backtest.csv", "text/csv")
+
+
+elif page == "Smart Stake Calc":
+    st.title("🧮 Smart Stake Calculator")
+    st.markdown("Calculate payout, implied probability, model edge, expected value, and safer fractional-Kelly stake sizing.")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        bankroll = st.number_input("Bankroll", min_value=0.0, value=10000.0, step=500.0)
+    with c2:
+        stake = st.number_input("Planned stake", min_value=0.0, value=500.0, step=50.0)
+    with c3:
+        odds = st.number_input("Decimal odds", min_value=1.01, value=1.80, step=0.01)
+    with c4:
+        model_prob = st.slider("Your/model probability", 1, 99, 55) / 100
+
+    implied = implied_probability(odds)
+    payout = stake * odds
+    profit = payout - stake
+    edge = model_prob - implied
+    ev = (model_prob * profit) - ((1 - model_prob) * stake)
+    ev_pct = ev / stake if stake else 0
+    kelly = kelly_fraction(model_prob, odds)
+    safer_kelly = kelly * 0.25
+    suggested = min(bankroll * safer_kelly, bankroll * 0.05) if bankroll else 0
+
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Potential payout", f"{payout:,.2f}")
+    s2.metric("Potential profit", f"{profit:,.2f}")
+    s3.metric("Implied probability", format_percent(implied))
+    s4.metric("Model edge", format_percent(edge))
+
+    e1, e2, e3 = st.columns(3)
+    e1.metric("Expected value", f"{ev:,.2f}", delta=format_percent(ev_pct))
+    e2.metric("Full Kelly", format_percent(kelly))
+    e3.metric("Safer 1/4 Kelly stake", f"{suggested:,.2f}")
+
+    if edge <= 0:
+        st.warning("No value detected: model probability is not higher than implied probability.")
+    elif suggested < stake:
+        st.info("Value detected, but your planned stake is above the safer 1/4 Kelly suggestion.")
+    else:
+        st.success("Value detected and planned stake is within safer sizing range.")
+
+    st.caption("Kelly sizing is only a mathematical tool. Use small stakes, avoid chasing losses, and manage risk.")
+
+
+elif page == "Bet Slip Tools":
+    st.title("🎟️ Bet Slip Tools")
+    st.markdown("Paste decimal odds to calculate combined odds, payout, and slip risk. This is the first version of merge/split-style bet tools.")
+
+    b1, b2 = st.columns([1.4, 1])
+    with b1:
+        odds_text = st.text_area("Paste decimal odds", value="1.45\n1.80\n2.10", height=180, help="Separate odds with spaces, commas, lines, /, |, or ;")
+    with b2:
+        slip_stake = st.number_input("Slip stake", min_value=0.0, value=1000.0, step=100.0)
+        target_parts = st.slider("Split into slips", 1, 10, 2)
+
+    odds_list = parse_decimal_odds(odds_text)
+    if not odds_list:
+        st.warning("Enter decimal odds above 1.00.")
+        st.stop()
+
+    combined = combined_decimal_odds(odds_list)
+    implied_combo = implied_probability(combined)
+    payout = slip_stake * combined
+    profit = payout - slip_stake
+    risk_label = "Low" if len(odds_list) <= 2 and combined < 4 else "Medium" if len(odds_list) <= 4 and combined < 12 else "High"
+
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("Selections", f"{len(odds_list)}")
+    q2.metric("Combined odds", f"{combined:.2f}")
+    q3.metric("Potential payout", f"{payout:,.2f}")
+    q4.metric("Risk level", risk_label)
+
+    st.subheader("Slip breakdown")
+    slip_df = pd.DataFrame({"selection": range(1, len(odds_list) + 1), "decimal_odds": odds_list})
+    slip_df["implied_probability"] = slip_df["decimal_odds"].map(implied_probability)
+    st.dataframe(slip_df, use_container_width=True)
+
+    split_stake = slip_stake / target_parts if target_parts else slip_stake
+    st.subheader("Simple split staking")
+    st.write(f"If you split **{slip_stake:,.2f}** into **{target_parts}** slips, each slip stake is about **{split_stake:,.2f}**.")
+    st.info("Next upgrade can split selections into multiple lower-risk combinations automatically.")
+
+    st.download_button(
+        "Download slip CSV",
+        data=slip_df.to_csv(index=False).encode("utf-8"),
+        file_name="bet_slip_odds.csv",
+        mime="text/csv",
+    )
+
+
+elif page == "ML Lab":
+    st.title("🤖 ML Lab — scikit-learn / XGBoost")
+    st.markdown(
+        "Train machine-learning models for match winner, match total points, and first-set Over/Under 18.5."
+    )
+
+    if ML_IMPORT_ERROR is not None:
+        st.error(f"ML dependencies could not be imported: {ML_IMPORT_ERROR}")
+        st.info("Run `pip install -r requirements.txt` and restart the app.")
+        st.stop()
+
+    st.info(
+        "The ML pipeline uses chronological pre-match features to reduce future leakage: rolling Elo, player form, point totals, first-set trends, and H2H history."
+    )
+
+    c1, c2, c3 = st.columns([1.4, 1.4, 1])
+    with c1:
+        algorithm = st.selectbox(
+            "Algorithm",
+            ["auto", "xgboost", "sklearn"],
+            help="auto uses XGBoost when installed, otherwise scikit-learn HistGradientBoosting.",
+        )
+    with c2:
+        row_cap_label = st.selectbox(
+            "Training size",
+            ["Quick: latest 50k rows", "Balanced: latest 120k rows", "Full: all rows"],
+            index=1,
+            help="Rows are orientation rows; each match creates two rows. Full data is most complete but slower.",
+        )
+        row_cap_map = {
+            "Quick: latest 50k rows": 50_000,
+            "Balanced: latest 120k rows": 120_000,
+            "Full: all rows": None,
+        }
+        max_training_rows = row_cap_map[row_cap_label]
+    with c3:
+        st.metric("Available ML rows", f"{len(matches) * 2:,}")
+
+    b1, b2, b3 = st.columns([1, 1, 2])
+    with b1:
+        train_clicked = st.button("Train model", type="primary")
+    with b2:
+        load_clicked = st.button("Load saved model")
+    with b3:
+        if MODEL_BUNDLE_PATH.exists():
+            st.caption(f"Saved bundle found: `{MODEL_BUNDLE_PATH}`")
+        else:
+            st.caption("No saved model bundle yet. Train one here or run `python scripts/train_models.py`.")
+
+    if load_clicked:
+        if MODEL_BUNDLE_PATH.exists():
+            st.session_state["ml_bundle"] = load_model_bundle(MODEL_BUNDLE_PATH)
+            st.success("Loaded saved ML bundle.")
+        else:
+            st.warning("No saved model bundle found yet.")
+
+    if train_clicked:
+        try:
+            st.session_state["ml_bundle"] = train_ml_cached(algorithm, max_training_rows)
+            st.success("ML training complete.")
+        except Exception as exc:
+            st.exception(exc)
+            st.stop()
+
+    bundle = st.session_state.get("ml_bundle")
+    if not bundle:
+        st.stop()
+
+    st.divider()
+    meta_cols = st.columns(5)
+    meta_cols[0].metric("Algorithm", bundle["algorithm"])
+    meta_cols[1].metric("Rows used", f"{bundle['total_rows']:,}")
+    meta_cols[2].metric("Train rows", f"{bundle['train_rows']:,}")
+    meta_cols[3].metric("Test rows", f"{bundle['test_rows']:,}")
+    meta_cols[4].metric("Models", "4")
+
+    st.subheader("Holdout metrics")
+    st.dataframe(metrics_table(bundle), use_container_width=True)
+
+    with st.expander("Save / reuse this model", expanded=False):
+        st.write("Save the trained bundle locally so the app can load it next time.")
+        if st.button("Save model bundle to models/setka_ml_bundle.joblib"):
+            saved_path = save_model_bundle(bundle, MODEL_BUNDLE_PATH)
+            st.success(f"Saved: {saved_path}")
+        st.code("python scripts/train_models.py --algorithm auto --output models/setka_ml_bundle.joblib", language="bash")
+
+    st.subheader("ML prediction")
+    p1, p2, p3, p4 = st.columns([2.2, 2.2, 1.25, 1.25])
+    with p1:
+        ml_player_a = st.selectbox("Player A", players_by_elo, index=0, key="ml_a")
+    with p2:
+        ml_player_b = st.selectbox("Player B", players_by_elo, index=1 if len(players_by_elo) > 1 else 0, key="ml_b")
+    with p3:
+        ml_first_line = st.number_input("1st set line", min_value=10.5, max_value=35.5, value=18.5, step=0.5, key="ml_first_line")
+    with p4:
+        ml_total_line = st.number_input("Total points line", min_value=30.5, max_value=140.5, value=75.5, step=0.5, key="ml_total_line")
+
+    if ml_player_a == ml_player_b:
+        st.error("Choose two different players.")
+        st.stop()
+
+    ml_pred = predict_with_bundle(
+        bundle,
+        ml_player_a,
+        ml_player_b,
+        first_set_line=ml_first_line,
+        total_points_line=ml_total_line,
+    )
+    rule_pred = predict_match(
+        ml_player_a,
+        ml_player_b,
+        player_stats,
+        matches,
+        global_stats,
+        first_set_line=ml_first_line,
+        total_points_line=ml_total_line,
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("ML predicted winner", ml_pred["predicted_winner"])
+    m2.metric(f"{ml_player_a} ML win chance", format_percent(ml_pred["player_a_win_probability"]))
+    m3.metric(f"ML 1st set Over {ml_first_line}", format_percent(ml_pred["first_set_over_probability"]))
+    m4.metric("ML expected total", format_number(ml_pred["expected_total_points"], 2))
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.plotly_chart(probability_bar(ml_pred), use_container_width=True)
+    with c2:
+        st.plotly_chart(
+            over_under_bar(
+                f"ML first set O/U {ml_first_line}",
+                ml_pred["first_set_over_probability"],
+                ml_pred["first_set_under_probability"],
+            ),
+            use_container_width=True,
+        )
+
+    compare_df = pd.DataFrame(
+        [
+            {
+                "model": "ML",
+                "predicted_winner": ml_pred["predicted_winner"],
+                f"{ml_player_a}_win_probability": ml_pred["player_a_win_probability"],
+                "expected_total_points": ml_pred["expected_total_points"],
+                "total_over_probability": ml_pred["total_points_over_probability"],
+                "expected_first_set_points": ml_pred["expected_first_set_points"],
+                "first_set_over_probability": ml_pred["first_set_over_probability"],
+            },
+            {
+                "model": "Rule blend",
+                "predicted_winner": rule_pred["predicted_winner"],
+                f"{ml_player_a}_win_probability": rule_pred["player_a_win_probability"],
+                "expected_total_points": rule_pred["expected_total_points"],
+                "total_over_probability": rule_pred["total_points_over_probability"],
+                "expected_first_set_points": rule_pred["expected_first_set_points"],
+                "first_set_over_probability": rule_pred["first_set_over_probability"],
+            },
+        ]
+    )
+    st.subheader("ML vs rule-blend comparison")
+    st.dataframe(compare_df, use_container_width=True)
+    st.caption("ML estimates are based on historical patterns only. They are not betting advice or guaranteed outcomes.")
+
+
+elif page == "Data Sources":
+    st.title("🧭 Data Sources & Research Registry")
+    st.markdown(
+        "A structured registry of the live-score, odds, table-tennis, ML, training, GitHub, and research resources you listed."
+    )
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Source registry dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    st.warning(
+        "Compliance note: the app does not blindly scrape websites. Use official APIs, licensed feeds, permitted exports, or manual imports."
+    )
+
+    s1, s2 = st.columns([1, 2])
+    with s1:
+        selected_category = st.selectbox("Category", ["All"] + source_categories())
+    with s2:
+        st.caption(
+            "Status tells you whether the source is already wired into the app, available as a scaffold, or kept as a research/manual-reference link."
+        )
+
+    st.subheader("Summary")
+    st.dataframe(summary_by_category(), use_container_width=True)
+
+    st.subheader("Sources")
+    source_df = registry_dataframe(selected_category)
+    st.dataframe(
+        source_df,
+        use_container_width=True,
+        height=620,
+        column_config={
+            "url": st.column_config.LinkColumn("url"),
+        },
+    )
+
+    with st.expander("Secrets for API integrations", expanded=False):
+        st.code(
+            """THE_ODDS_API_KEY="..."
+PINNACLE_USERNAME="..."
+PINNACLE_PASSWORD="..."
+BETFAIR_APP_KEY="..."
+BETFAIR_SESSION_TOKEN="...""",
+            language="bash",
+        )
+
+    with st.expander("Recommended next build steps", expanded=False):
+        st.markdown(
+            """
+1. Add your GitHub repo URL so the project can be pushed.
+2. Add The Odds API key and discover the exact table-tennis sport key available to your account.
+3. If you have Pinnacle/Betfair access, wire the approved endpoints into `src/external_clients.py`.
+4. Add a canonical player-name mapping table for matching odds/live-score names to Setka CSV names.
+5. Backtest predictions against historical odds before relying on any edge calculation.
+            """
+        )
+
+
+elif page == "Leaderboard":
+    st.title("🏆 Leaderboard")
+    st.markdown("Search and rank players by Elo, matches, win rate, form, and point-total profile.")
+
+    fc1, fc2, fc3 = st.columns([2, 1, 1])
+    with fc1:
+        search = st.text_input("Search player", placeholder="Type part of a player name...")
+    with fc2:
+        min_matches = st.number_input("Minimum history matches", min_value=0, value=0, step=10)
+    with fc3:
+        sort_by = st.selectbox(
+            "Sort by",
+            ["elo", "matches", "win_rate", "recent_win_rate", "avg_total_points", "first_set_over_18_5_rate"],
+        )
+
+    df = player_stats.copy()
+    if search:
+        df = df[df["player"].str.contains(search, case=False, na=False)]
+    df = df[df["matches"] >= min_matches]
+    df = df.sort_values(sort_by, ascending=False)
+
+    show_cols = [
+        "player",
+        "elo",
+        "matches",
+        "wins",
+        "losses",
+        "win_rate",
+        "recent_win_rate",
+        "avg_total_points",
+        "avg_first_set_total",
+        "first_set_over_18_5_rate",
+        "last_played",
+    ]
+    st.dataframe(df[show_cols], use_container_width=True, height=600)
+    st.download_button(
+        "Download filtered leaderboard CSV",
+        data=df[show_cols].to_csv(index=False).encode("utf-8"),
+        file_name="setka_filtered_leaderboard.csv",
+        mime="text/csv",
+    )
+
+
+elif page == "Player Explorer":
+    st.title("🔎 Player Explorer")
+    player = st.selectbox("Choose player", players_alpha)
+    row = player_stats.loc[player_stats["player"] == player].iloc[0]
+    log = player_log.loc[player_log["player"] == player].copy().sort_values("date_time")
+
+    st.subheader(player)
+    p1, p2, p3, p4, p5 = st.columns(5)
+    p1.metric("Elo", f"{row['elo']:.1f}")
+    p2.metric("Matches", f"{int(row['matches']):,}")
+    p3.metric("Win rate", format_percent(row["win_rate"]))
+    p4.metric("Recent win rate", format_percent(row["recent_win_rate"]))
+    p5.metric("1st set O18.5 rate", format_percent(row["first_set_over_18_5_rate"]))
+
+    if log.empty:
+        st.info("No match history for this player in the uploaded match file.")
+        st.stop()
+
+    chart_df = log[["date_time", "won", "total_points", "first_set_total", "point_diff"]].copy()
+    chart_df["rolling_win_rate_20"] = chart_df["won"].rolling(20, min_periods=3).mean()
+    chart_df["match_number"] = range(1, len(chart_df) + 1)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        fig = px.line(
+            chart_df,
+            x="date_time",
+            y="rolling_win_rate_20",
+            title="Rolling win rate / last 20 matches",
+            labels={"rolling_win_rate_20": "Rolling win rate", "date_time": "Date"},
+        )
+        fig.update_yaxes(tickformat=".0%", range=[0, 1])
+        st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        fig = px.histogram(
+            chart_df,
+            x="total_points",
+            nbins=35,
+            title="Match total points distribution",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    c3, c4 = st.columns(2)
+    with c3:
+        fig = px.histogram(
+            chart_df,
+            x="first_set_total",
+            nbins=25,
+            title="First-set points distribution",
+        )
+        fig.add_vline(x=18.5, line_dash="dash", line_color="#F97316")
+        st.plotly_chart(fig, use_container_width=True)
+    with c4:
+        recent_opponents = (
+            log.groupby("opponent")
+            .agg(matches=("won", "size"), wins=("won", "sum"), avg_total_points=("total_points", "mean"))
+            .reset_index()
+        )
+        recent_opponents["win_rate"] = recent_opponents["wins"] / recent_opponents["matches"]
+        recent_opponents = recent_opponents.sort_values("matches", ascending=False).head(15)
+        fig = px.bar(
+            recent_opponents,
+            x="matches",
+            y="opponent",
+            orientation="h",
+            title="Most common opponents",
+            hover_data=["wins", "win_rate", "avg_total_points"],
+        )
+        fig.update_yaxes(autorange="reversed")
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Latest matches")
+    st.dataframe(player_latest_table(log), use_container_width=True)
+
+
+elif page == "Head-to-Head":
+    st.title("⚔️ Head-to-Head")
+    c1, c2 = st.columns(2)
+    with c1:
+        player_a = st.selectbox("Player A", players_alpha, index=0, key="h2h_a")
+    with c2:
+        player_b = st.selectbox("Player B", players_alpha, index=1 if len(players_alpha) > 1 else 0, key="h2h_b")
+
+    if player_a == player_b:
+        st.error("Choose two different players.")
+        st.stop()
+
+    summary, h2h_rows = get_head_to_head(matches, player_a, player_b)
+
+    h1, h2, h3, h4, h5 = st.columns(5)
+    h1.metric("H2H matches", f"{summary['matches']}")
+    h2.metric(f"{player_a} wins", f"{summary['player_a_wins']}")
+    h3.metric(f"{player_b} wins", f"{summary['player_b_wins']}")
+    h4.metric("Avg total points", format_number(summary["avg_total_points"], 2))
+    h5.metric("1st set O18.5", format_percent(summary["first_set_over_18_5_rate"]))
+
+    if h2h_rows.empty:
+        st.info("No direct H2H matches found for these players.")
+    else:
+        chart = h2h_rows.sort_values("date_time").copy()
+        chart["player_a_cum_wins"] = chart["selected_player_won"].cumsum()
+        chart["match_no"] = range(1, len(chart) + 1)
+        fig = px.line(
+            chart,
+            x="match_no",
+            y="player_a_cum_wins",
+            title=f"Cumulative H2H wins for {player_a}",
+            labels={"match_no": "H2H match number", "player_a_cum_wins": "Cumulative wins"},
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(h2h_display_table(h2h_rows, limit=100), use_container_width=True)
+
+
+elif page == "Live Odds":
+    st.title("📡 Live Odds + Setka Links")
+    st.markdown(
+        "Connect The Odds API when you add an API key, and use the official Setka Cup site for schedules/results."
+    )
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Odds/API dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.info("Run `pip install -r requirements.txt` and restart the app.")
+        st.stop()
+
+    st.subheader("Official Setka Cup")
+    oc1, oc2, oc3 = st.columns([1.3, 1, 2])
+    with oc1:
+        st.link_button("Open Setka Cup official site", OFFICIAL_SETKA_URL)
+    with oc2:
+        check_site = st.button("Check site status")
+    with oc3:
+        st.caption(
+            "The official Setka website can be dynamic. This app checks availability; plug in an official feed/API here if you have one."
+        )
+    if check_site:
+        status = fetch_official_site_status()
+        st.json(status_as_dict(status))
+
+    st.divider()
+    st.subheader("The Odds API")
+
+    secret_key = None
+    try:
+        secret_key = st.secrets.get("THE_ODDS_API_KEY")
+    except Exception:
+        secret_key = None
+    env_key = os.getenv("THE_ODDS_API_KEY")
+    entered_key = st.text_input(
+        "The Odds API key for this session",
+        type="password",
+        value="",
+        help="Leave blank to use THE_ODDS_API_KEY from environment or Streamlit secrets.",
+    )
+    api_key = entered_key or env_key or secret_key
+
+    if not api_key:
+        st.warning("No Odds API key found yet.")
+        st.write("Add it locally as an environment variable:")
+        st.code("export THE_ODDS_API_KEY='your_api_key_here'\nstreamlit run app.py", language="bash")
+        st.write("Or in Streamlit Cloud secrets:")
+        st.code('THE_ODDS_API_KEY = "your_api_key_here"', language="toml")
+        st.info("The code is already built; live odds will work after you add the key.")
+    else:
+        st.success("API key detected for this session.")
+
+    with st.expander("Discover sport keys", expanded=False):
+        all_sports = st.checkbox("Include inactive sports", value=False)
+        if st.button("List sports from The Odds API"):
+            if not api_key:
+                st.error("Add an API key first.")
             else:
-                status_emoji = "❌"
-                status_color = "#FF3366"
-                result_text = f"Wrong. Actual: {pred.get('actual_winner', '?')}"
-            
-            conf = pred.get("confidence", 0) * 100
-            
-            st.markdown(f"""
-            <div class="pick-card" style="border-left: 4px solid {status_color};">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem;">
-                    <div style="font-weight: 700; color: #E8ECFF;">
-                        {pred.get('player1', '?')} vs {pred.get('player2', '?')}
-                    </div>
-                    <div style="font-size: 1.2rem;">{status_emoji}</div>
-                </div>
-                <div style="color: #B537FF; font-size: 0.85rem; margin-bottom: 0.5rem;">
-                    📅 {pred.get('match_date', '?')} • ⏰ {pred.get('match_time', '?')} • 📍 {pred.get('location', '?')}
-                </div>
-                <div style="background: rgba(0, 245, 255, 0.05); padding: 0.5rem; border-radius: 8px;">
-                    <div style="color: #00F5FF; font-weight: 700;">
-                        🎯 Predicted: {pred.get('predicted_winner', '?')} ({conf:.1f}%)
-                    </div>
-                    <div style="color: {status_color}; font-weight: 700; margin-top: 0.3rem;">
-                        {result_text}
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # Info section
-    st.markdown("### 💡 How Track Record Works")
-    st.markdown("""
-    <div class="pick-card">
-        <div style="color: #E8ECFF;">
-            <strong>🤖 Automatic Tracking:</strong> Every prediction shown on the All Picks page
-            is automatically logged. As matches complete, results are compared against predictions.<br><br>
-            <strong>📊 What We Track:</strong><br>
-            • Winner predictions (most important)<br>
-            • Total points Over/Under 75.5<br>
-            • First set Over/Under 18.5<br>
-            • Sets Over/Under 3.5<br><br>
-            <strong>🎯 Accuracy Goals:</strong><br>
-            • 65%+ Winner accuracy → Excellent (green)<br>
-            • 60-65% Winner accuracy → Good (cyan)<br>
-            • Below 60% → Needs improvement (amber/red)<br><br>
-            <em>Higher sample sizes = more reliable accuracy numbers. Focus on the 50+ settled range.</em>
-        </div>
-    </div>
-    """)
+                try:
+                    sports_df, quota = list_sports(api_key, all_sports=all_sports)
+                    st.caption(f"Quota headers: {quota}")
+                    st.dataframe(sports_df, use_container_width=True, height=420)
+                except OddsAPIError as exc:
+                    st.error(str(exc))
+
+    st.markdown("### Fetch odds")
+    f1, f2, f3, f4 = st.columns([1.5, 1.2, 1.4, 1])
+    with f1:
+        sport_key = st.text_input(
+            "Sport key",
+            value="table_tennis",
+            help="Use 'List sports' to find the exact key available to your account.",
+        )
+    with f2:
+        regions = st.text_input("Regions", value="eu,uk,us")
+    with f3:
+        markets = st.text_input("Markets", value="h2h,totals")
+    with f4:
+        odds_format = st.selectbox("Odds format", ["decimal", "american"], index=0)
+
+    if st.button("Fetch odds"):
+        if not api_key:
+            st.error("Add an API key first.")
+        else:
+            try:
+                events, quota = fetch_odds(
+                    api_key,
+                    sport_key=sport_key,
+                    regions=regions,
+                    markets=markets,
+                    odds_format=odds_format,
+                )
+                flat = normalize_odds_events(events)
+                flat = add_implied_probabilities(flat, odds_format=odds_format)
+                st.caption(f"Quota headers: {quota}")
+                st.metric("Events returned", f"{len(events):,}")
+                if flat.empty:
+                    st.info("No odds rows returned for this sport/region/market combination.")
+                else:
+                    st.dataframe(flat, use_container_width=True, height=520)
+                    st.download_button(
+                        "Download odds CSV",
+                        data=flat.to_csv(index=False).encode("utf-8"),
+                        file_name=f"odds_{sport_key}.csv",
+                        mime="text/csv",
+                    )
+            except OddsAPIError as exc:
+                st.error(str(exc))
+                st.info(
+                    "If the sport key is invalid or unavailable, use 'List sports' to find the exact key. Some accounts/plans may not include table tennis or Setka markets."
+                )
+
+    with st.expander("How to compare odds with app predictions", expanded=False):
+        st.markdown(
+            """
+1. Fetch odds for the correct table-tennis sport key and markets.
+2. Match the event player names to the names in this dataset.
+3. Use Match Predictor or ML Lab to estimate probabilities.
+4. Compare model probability to bookmaker implied probability. For decimal odds, implied probability is `1 / price` before bookmaker margin removal.
+            """
+        )
 
 
-# ============================================
-# ROADMAP PAGE
-# ============================================
-elif page == "🗺️ Roadmap":
-    st.markdown("# 🗺️ ORACLEBET ROADMAP")
-    st.caption("Our journey to becoming the #1 table tennis prediction app")
-    
-    # Progress overview
-    st.markdown("### 📊 Overall Progress")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("✅ Completed", "8", "Features")
-    with col2:
-        st.metric("🚧 In Progress", "3", "Active")
-    with col3:
-        st.metric("🔮 Planned", "12", "Upcoming")
-    
-    st.markdown("---")
-    
-    # PHASE 1: COMPLETED
-    st.markdown("## ✅ PHASE 1: FOUNDATION")
-    st.caption("What we've already built (Week 1)")
-    
-    st.markdown("""
-    <div class="roadmap-phase roadmap-done">
-        <div class="roadmap-status status-done">✅ COMPLETE</div>
-        <div class="roadmap-title">🏗️ Core Infrastructure</div>
-        <div class="roadmap-features">
-            <ul>
-                <li>✨ Neon futuristic design system</li>
-                <li>🎨 Custom CSS with glow effects</li>
-                <li>📱 Mobile-first responsive layout</li>
-                <li>🔐 Persistent data storage</li>
-                <li>⚙️ User-configurable settings</li>
-            </ul>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="roadmap-phase roadmap-done">
-        <div class="roadmap-status status-done">✅ COMPLETE</div>
-        <div class="roadmap-title">🤖 ML Prediction Engine</div>
-        <div class="roadmap-features">
-            <ul>
-                <li>📊 XGBoost model trained on 155K+ matches</li>
-                <li>🎯 60+ features including fatigue & momentum</li>
-                <li>⚡ Dynamic Elo ratings with margin adjustments</li>
-                <li>🧠 AI reasoning for each pick</li>
-                <li>📈 Model transparency & metrics</li>
-            </ul>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="roadmap-phase roadmap-done">
-        <div class="roadmap-status status-done">✅ COMPLETE</div>
-        <div class="roadmap-title">💰 Bankroll Management</div>
-        <div class="roadmap-features">
-            <ul>
-                <li>🛡️ Kelly Criterion stake calculator</li>
-                <li>📉 Daily loss limit protection</li>
-                <li>📋 Complete bet journal</li>
-                <li>🔥 Win/loss streak tracking</li>
-                <li>💵 Nigerian Naira (₦) support</li>
-            </ul>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # PHASE 2: IN PROGRESS
-    st.markdown("## 🚧 PHASE 2: ACCURACY BOOST")
-    st.caption("What we're working on now (Week 2-3)")
-    
-    st.markdown("""
-    <div class="roadmap-phase roadmap-progress">
-        <div class="roadmap-status status-progress">🚧 IN PROGRESS</div>
-        <div class="roadmap-title">🎯 Model Accuracy Upgrades</div>
-        <div class="roadmap-features">
-            <ul>
-                <li>⚖️ Time-weighted training (newer matches count more)</li>
-                <li>📏 Probability calibration layer</li>
-                <li>🎼 Ensemble models (XGBoost + LightGBM + CatBoost)</li>
-                <li>🧹 Data cleaning & duplicate player detection</li>
-                <li>🎯 Target: 60% → 68% winner accuracy</li>
-            </ul>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="roadmap-phase roadmap-progress">
-        <div class="roadmap-status status-progress">🚧 IN PROGRESS</div>
-        <div class="roadmap-title">📊 Paper Trading Validation</div>
-        <div class="roadmap-features">
-            <ul>
-                <li>📝 14-day paper trading period</li>
-                <li>📈 Real-world accuracy tracking</li>
-                <li>💡 Performance analysis dashboard</li>
-                <li>🎯 Identify winning bet types</li>
-            </ul>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # PHASE 3: UPCOMING
-    st.markdown("## 🔮 PHASE 3: NEXT-LEVEL FEATURES")
-    st.caption("Coming soon (Month 2)")
-    
-    st.markdown("""
-    <div class="roadmap-phase roadmap-future">
-        <div class="roadmap-status status-future">🔮 PLANNED</div>
-        <div class="roadmap-title">💬 AI Chat Coach</div>
-        <div class="roadmap-features">
-            <ul>
-                <li>🗨️ Ask questions in plain English</li>
-                <li>🎯 "Show me best picks for tonight"</li>
-                <li>📊 "Analyze this matchup"</li>
-                <li>💰 "How much should I bet?"</li>
-                <li>🧠 Powered by GPT/Claude API</li>
-            </ul>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="roadmap-phase roadmap-future">
-        <div class="roadmap-status status-future">🔮 PLANNED</div>
-        <div class="roadmap-title">🎰 Bookmaker Integration</div>
-        <div class="roadmap-features">
-            <ul>
-                <li>📡 Live SportyBet odds scraping</li>
-                <li>💎 Value detection (odds vs probability)</li>
-                <li>⚖️ Multi-bookmaker comparison</li>
-                <li>🎯 Automatic edge alerts</li>
-                <li>💰 Best odds finder</li>
-            </ul>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="roadmap-phase roadmap-future">
-        <div class="roadmap-status status-future">🔮 PLANNED</div>
-        <div class="roadmap-title">📺 Live Match Intelligence</div>
-        <div class="roadmap-features">
-            <ul>
-                <li>⚡ Real-time probability updates during matches</li>
-                <li>📊 Set-by-set predictions</li>
-                <li>🎯 Momentum shift detection</li>
-                <li>💰 Cash-out recommendations</li>
-                <li>🔔 Live value alerts</li>
-            </ul>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="roadmap-phase roadmap-future">
-        <div class="roadmap-status status-future">🔮 PLANNED</div>
-        <div class="roadmap-title">🧬 Personal Betting DNA</div>
-        <div class="roadmap-features">
-            <ul>
-                <li>📊 Your winning patterns analysis</li>
-                <li>⏰ Best times to bet for YOU</li>
-                <li>🎯 Player types you profit from</li>
-                <li>⚠️ Tilt detection & alerts</li>
-                <li>📈 Personalized strategy tips</li>
-            </ul>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # PHASE 4: FUTURE
-    st.markdown("## 🚀 PHASE 4: ELITE FEATURES")
-    st.caption("Long-term vision (Month 3+)")
-    
-    st.markdown("""
-    <div class="roadmap-phase roadmap-future">
-        <div class="roadmap-status status-future">🔮 VISION</div>
-        <div class="roadmap-title">🌟 Premium Tier</div>
-        <div class="roadmap-features">
-            <ul>
-                <li>👥 Community wisdom + AI hybrid</li>
-                <li>📱 Push notifications for hot picks</li>
-                <li>🎓 Educational content & tutorials</li>
-                <li>🏆 Leaderboard & achievements</li>
-                <li>💎 VIP tier with 1-on-1 AI coaching</li>
-            </ul>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="roadmap-phase roadmap-future">
-        <div class="roadmap-status status-future">🔮 VISION</div>
-        <div class="roadmap-title">📱 Native Mobile App</div>
-        <div class="roadmap-features">
-            <ul>
-                <li>📲 iOS & Android apps</li>
-                <li>🔔 Real-time push notifications</li>
-                <li>🎨 Native mobile UI</li>
-                <li>⚡ Faster performance</li>
-                <li>🌐 Offline mode</li>
-            </ul>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # Community
-    st.markdown("### 💡 Feature Requests")
-    st.info("Have an idea? Message us via the app to suggest new features. Your input shapes OracleBet's future!")
-    
-    st.markdown("### 🎯 Our Mission")
-    st.markdown("""
-    <div class="pick-card">
-        <strong>🔮 OracleBet's Mission:</strong><br><br>
-        To provide the most <strong>accurate, transparent, and disciplined</strong> table tennis 
-        prediction platform - helping bettors make <strong>data-driven decisions</strong> instead 
-        of emotional ones.<br><br>
-        <em>We believe that with the right tools, ANYONE can become a profitable bettor. 
-        Not through luck, but through discipline, data, and consistency.</em>
-    </div>
-    """, unsafe_allow_html=True)
+elif page == "Data Health":
+    st.title("🧪 Data Health")
+    st.markdown("Quick checks on the uploaded files and parsed scoring data.")
 
+    g1, g2, g3, g4 = st.columns(4)
+    g1.metric("Match rows", f"{len(matches):,}")
+    g2.metric("Players", f"{player_stats['player'].nunique():,}")
+    g3.metric("Avg total points", format_number(global_stats["total_points_mean"], 2))
+    g4.metric("Avg 1st-set points", format_number(global_stats["first_set_mean"], 2))
 
-# ============================================
-# FOOTER
-# ============================================
-st.markdown("---")
-st.caption("🔮 OracleBet v1.0 • Built with 155K+ matches • Paper trade first, bet second")
+    c1, c2 = st.columns(2)
+    with c1:
+        set_counts = matches["sets_played"].value_counts().sort_index().reset_index()
+        set_counts.columns = ["sets_played", "matches"]
+        fig = px.bar(set_counts, x="sets_played", y="matches", title="Matches by number of sets")
+        st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        fig = px.histogram(matches, x="first_set_total", nbins=35, title="First-set total distribution")
+        fig.add_vline(x=18.5, line_dash="dash", line_color="#F97316")
+        st.plotly_chart(fig, use_container_width=True)
+
+    c3, c4 = st.columns(2)
+    with c3:
+        top_comp = matches["competition"].value_counts().head(20).reset_index()
+        top_comp.columns = ["competition", "matches"]
+        fig = px.bar(top_comp, x="matches", y="competition", orientation="h", title="Top competitions")
+        fig.update_yaxes(autorange="reversed")
+        st.plotly_chart(fig, use_container_width=True)
+    with c4:
+        missing = matches.isna().sum().reset_index()
+        missing.columns = ["column", "missing_values"]
+        st.dataframe(missing, use_container_width=True)
+
+    st.subheader("Raw match sample")
+    sample_cols = [
+        "date_time",
+        "competition",
+        "player1",
+        "player2",
+        "winner",
+        "set_scores",
+        "total_points",
+        "first_set_total",
+        "sets_played",
+    ]
+    st.dataframe(matches[sample_cols].head(100), use_container_width=True)
