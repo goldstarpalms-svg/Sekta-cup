@@ -534,13 +534,22 @@ def apply_pick_strengths(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def format_prediction_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Format prediction tables safely for Streamlit/Arrow.
+
+    Streamlit uses PyArrow under the hood; duplicated columns or mixed object
+    values can crash rendering. This helper makes display tables robust.
+    """
     out = df.copy()
+    out = out.loc[:, ~out.columns.duplicated()].copy()
     for col in ["winner_probability", "total_probability", "first_set_probability", "sets_probability", "best_probability"]:
         if col in out:
-            out[col] = out[col].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
-    for col in ["expected_total_points", "expected_first_set_points", "expected_sets_played", "confidence_score"]:
+            out[col] = out[col].map(lambda x: f"{x:.1%}" if pd.notna(x) and not isinstance(x, str) else x if pd.notna(x) else "-")
+    for col in ["expected_total_points", "expected_first_set_points", "expected_sets_played", "confidence_score", "edge_score"]:
         if col in out:
-            out[col] = out[col].map(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
+            out[col] = out[col].map(lambda x: f"{x:.1f}" if pd.notna(x) and not isinstance(x, str) else x if pd.notna(x) else "-")
+    for col in out.columns:
+        if out[col].dtype == "object":
+            out[col] = out[col].map(lambda x: ", ".join(map(str, x)) if isinstance(x, (list, tuple, set)) else x)
     return out
 
 
@@ -1236,9 +1245,6 @@ elif page == "Live Predictions":
         "sets_strength",
         "expected_sets_played",
         "confidence",
-        "best_market_confidence",
-        "winner_agreement",
-        "match_fatigue_risk",
         "upset_risk",
         "upset_risk_flags",
         "h2h_matches",
