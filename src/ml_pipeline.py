@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections import deque
+from collections import deque, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,51 +14,36 @@ import pandas as pd
 from .setka_core import enrich_matches
 
 FEATURE_COLUMNS = [
-    "a_elo",
-    "b_elo",
-    "elo_diff",
-    "elo_probability",
-    "a_matches",
-    "b_matches",
-    "match_count_diff",
-    "a_win_rate",
-    "b_win_rate",
-    "win_rate_diff",
-    "a_recent_win_rate",
-    "b_recent_win_rate",
-    "recent_win_rate_diff",
-    "a_first_set_win_rate",
-    "b_first_set_win_rate",
-    "first_set_win_rate_diff",
-    "a_point_diff_avg",
-    "b_point_diff_avg",
-    "point_diff_diff",
-    "a_avg_total_points",
-    "b_avg_total_points",
-    "avg_total_points_mean",
-    "avg_total_points_diff",
-    "a_recent_avg_total_points",
-    "b_recent_avg_total_points",
+    "a_elo", "b_elo", "elo_diff", "elo_probability",
+    "a_elo_momentum", "b_elo_momentum", "elo_momentum_diff",
+    "a_matches", "b_matches", "match_count_diff",
+    "a_win_rate", "b_win_rate", "win_rate_diff",
+    "a_recent_win_rate", "b_recent_win_rate", "recent_win_rate_diff",
+    "a_weighted_recent_form", "b_weighted_recent_form", "weighted_form_diff",
+    "a_set_win_rate", "b_set_win_rate", "set_win_rate_diff",
+    "a_first_set_win_rate", "b_first_set_win_rate", "first_set_win_rate_diff",
+    "a_point_diff_avg", "b_point_diff_avg", "point_diff_diff",
+    "a_recent_point_diff", "b_recent_point_diff", "recent_point_diff_diff",
+    "a_avg_total_points", "b_avg_total_points",
+    "avg_total_points_mean", "avg_total_points_diff",
+    "a_recent_avg_total_points", "b_recent_avg_total_points",
     "recent_avg_total_points_mean",
-    "a_avg_first_set_total",
-    "b_avg_first_set_total",
+    "a_avg_first_set_total", "b_avg_first_set_total",
     "avg_first_set_total_mean",
-    "a_recent_avg_first_set_total",
-    "b_recent_avg_first_set_total",
+    "a_recent_avg_first_set_total", "b_recent_avg_first_set_total",
     "recent_avg_first_set_total_mean",
-    "a_first_over_rate",
-    "b_first_over_rate",
-    "first_over_rate_mean",
-    "first_over_rate_diff",
-    "a_recent_first_over_rate",
-    "b_recent_first_over_rate",
+    "a_first_over_rate", "b_first_over_rate",
+    "first_over_rate_mean", "first_over_rate_diff",
+    "a_recent_first_over_rate", "b_recent_first_over_rate",
     "recent_first_over_rate_mean",
-    "h2h_matches",
-    "h2h_a_win_rate",
-    "h2h_a_win_diff",
-    "h2h_avg_total_points",
-    "h2h_avg_first_set_total",
-    "h2h_first_over_rate",
+    "a_hours_since_last", "b_hours_since_last",
+    "a_matches_today", "b_matches_today", "matches_today_diff",
+    "a_days_since_last_win", "b_days_since_last_win",
+    "a_win_streak", "b_win_streak",
+    "a_loss_streak", "b_loss_streak", "streak_diff",
+    "h2h_matches", "h2h_a_win_rate", "h2h_a_win_diff",
+    "h2h_avg_total_points", "h2h_avg_first_set_total",
+    "h2h_first_over_rate", "h2h_recent_a_win_rate",
 ]
 
 TARGET_WIN = "target_a_win"
@@ -67,27 +52,37 @@ TARGET_TOTAL_POINTS = "target_total_points"
 TARGET_FIRST_SET_POINTS = "target_first_set_points"
 
 
-# -----------------------------
-# Rolling feature state
-# -----------------------------
-
-
-def _rate(successes: float, attempts: float, prior: float = 0.5, strength: float = 8.0) -> float:
+def _rate(successes, attempts, prior=0.5, strength=8.0):
     return float((successes + prior * strength) / (attempts + strength))
 
 
-def _avg(total: float, count: float, default: float, strength: float = 6.0) -> float:
+def _avg(total, count, default, strength=6.0):
     return float((total + default * strength) / (count + strength))
 
 
-def _elo_probability(elo_a: float, elo_b: float) -> float:
+def _elo_probability(elo_a, elo_b):
     return float(1 / (1 + 10 ** ((elo_b - elo_a) / 400)))
 
 
-def _normal_over_probability(mean: float, line: float, std: float) -> float:
+def _normal_over_probability(mean, line, std):
     std = max(float(std), 0.1)
     z = (float(line) - float(mean)) / std
     return float(max(0.02, min(0.98, 0.5 * math.erfc(z / math.sqrt(2)))))
+
+
+def _dynamic_k_factor(match_count):
+    if match_count < 30:
+        return 40.0
+    elif match_count < 100:
+        return 32.0
+    else:
+        return 24.0
+
+
+def _margin_multiplier(sets_won, sets_lost):
+    margin = abs(sets_won - sets_lost)
+    return 1.0 + (margin - 1) * 0.15
+
 
 
 @dataclass
@@ -100,80 +95,108 @@ class PlayerRollingStats:
     first_set_total_sum: float = 0.0
     first_set_wins: int = 0
     first_set_over_18_5: int = 0
+    sets_won_total: int = 0
+    sets_lost_total: int = 0
     sets_played_sum: float = 0.0
-    recent_wins: deque = field(default_factory=lambda: deque(maxlen=20))
-    recent_total_points: deque = field(default_factory=lambda: deque(maxlen=20))
-    recent_first_set_total: deque = field(default_factory=lambda: deque(maxlen=20))
-    recent_first_over: deque = field(default_factory=lambda: deque(maxlen=20))
+    current_win_streak: int = 0
+    current_loss_streak: int = 0
+    last_match_datetime: Any = None
+    last_win_datetime: Any = None
+    elo_history: deque = field(default_factory=lambda: deque(maxlen=10))
+    match_datetimes_today: list = field(default_factory=list)
+    recent_wins: deque = field(default_factory=lambda: deque(maxlen=15))
+    recent_total_points: deque = field(default_factory=lambda: deque(maxlen=15))
+    recent_first_set_total: deque = field(default_factory=lambda: deque(maxlen=15))
+    recent_first_over: deque = field(default_factory=lambda: deque(maxlen=15))
+    recent_point_diffs: deque = field(default_factory=lambda: deque(maxlen=15))
 
-    def as_features(self, defaults: dict[str, float]) -> dict[str, float]:
+    def hours_since_last_match(self, current_dt):
+        if self.last_match_datetime is None or pd.isna(current_dt):
+            return 168.0
+        try:
+            delta = pd.Timestamp(current_dt) - pd.Timestamp(self.last_match_datetime)
+            hours = delta.total_seconds() / 3600.0
+            return float(max(0.0, min(hours, 720.0)))
+        except Exception:
+            return 168.0
+
+    def matches_today(self, current_dt):
+        if pd.isna(current_dt):
+            return 0
+        try:
+            current_date = pd.Timestamp(current_dt).date()
+            return sum(1 for dt in self.match_datetimes_today
+                       if pd.Timestamp(dt).date() == current_date)
+        except Exception:
+            return 0
+
+    def days_since_last_win(self, current_dt):
+        if self.last_win_datetime is None or pd.isna(current_dt):
+            return 30.0
+        try:
+            delta = pd.Timestamp(current_dt) - pd.Timestamp(self.last_win_datetime)
+            days = delta.total_seconds() / 86400.0
+            return float(max(0.0, min(days, 90.0)))
+        except Exception:
+            return 30.0
+
+    def weighted_recent_form(self):
+        if not self.recent_wins:
+            return 0.5
+        wins = list(self.recent_wins)
+        n = len(wins)
+        weights = np.exp(-0.08 * np.arange(n - 1, -1, -1))
+        return float(np.average(wins, weights=weights))
+
+    def elo_momentum(self):
+        if len(self.elo_history) < 2:
+            return 0.0
+        return float(self.elo_history[-1] - self.elo_history[0])
+
+    def as_features(self, defaults, current_dt=None):
         matches = float(self.matches)
         win_rate = _rate(self.wins, matches, prior=0.5, strength=10)
-        recent_win_rate = (
-            float(np.mean(self.recent_wins)) if self.recent_wins else win_rate
-        )
-        avg_total_points = _avg(
-            self.total_points_sum, matches, defaults["avg_total_points"], strength=8
-        )
-        avg_first_set_total = _avg(
-            self.first_set_total_sum, matches, defaults["avg_first_set_total"], strength=8
-        )
-        avg_points_for = _avg(
-            self.points_for_sum, matches, defaults["avg_points_for"], strength=8
-        )
-        avg_points_against = _avg(
-            self.points_against_sum,
-            matches,
-            defaults["avg_points_against"],
-            strength=8,
-        )
-        recent_avg_total = (
-            float(np.mean(self.recent_total_points))
-            if self.recent_total_points
-            else avg_total_points
-        )
-        recent_avg_first = (
-            float(np.mean(self.recent_first_set_total))
-            if self.recent_first_set_total
-            else avg_first_set_total
-        )
-        first_over_rate = _rate(
-            self.first_set_over_18_5,
-            matches,
-            prior=defaults["first_set_over_18_5_rate"],
-            strength=10,
-        )
-        recent_first_over_rate = (
-            float(np.mean(self.recent_first_over))
-            if self.recent_first_over
-            else first_over_rate
-        )
+        recent_win_rate = float(np.mean(self.recent_wins)) if self.recent_wins else win_rate
+        weighted_form = self.weighted_recent_form()
+        total_sets = self.sets_won_total + self.sets_lost_total
+        set_win_rate = _rate(self.sets_won_total, total_sets, prior=0.5, strength=15) if total_sets > 0 else 0.5
+        avg_total_points = _avg(self.total_points_sum, matches, defaults["avg_total_points"], strength=8)
+        avg_first_set_total = _avg(self.first_set_total_sum, matches, defaults["avg_first_set_total"], strength=8)
+        avg_points_for = _avg(self.points_for_sum, matches, defaults["avg_points_for"], strength=8)
+        avg_points_against = _avg(self.points_against_sum, matches, defaults["avg_points_against"], strength=8)
+        recent_avg_total = float(np.mean(self.recent_total_points)) if self.recent_total_points else avg_total_points
+        recent_avg_first = float(np.mean(self.recent_first_set_total)) if self.recent_first_set_total else avg_first_set_total
+        first_over_rate = _rate(self.first_set_over_18_5, matches, prior=defaults["first_set_over_18_5_rate"], strength=10)
+        recent_first_over_rate = float(np.mean(self.recent_first_over)) if self.recent_first_over else first_over_rate
         first_set_win_rate = _rate(self.first_set_wins, matches, prior=0.5, strength=10)
+        recent_point_diff = float(np.mean(self.recent_point_diffs)) if self.recent_point_diffs else avg_points_for - avg_points_against
+
         return {
             "matches": matches,
             "win_rate": win_rate,
             "recent_win_rate": recent_win_rate,
+            "weighted_recent_form": weighted_form,
+            "set_win_rate": set_win_rate,
             "first_set_win_rate": first_set_win_rate,
             "point_diff_avg": avg_points_for - avg_points_against,
+            "recent_point_diff": recent_point_diff,
             "avg_total_points": avg_total_points,
             "recent_avg_total_points": recent_avg_total,
             "avg_first_set_total": avg_first_set_total,
             "recent_avg_first_set_total": recent_avg_first,
             "first_over_rate": first_over_rate,
             "recent_first_over_rate": recent_first_over_rate,
+            "hours_since_last": self.hours_since_last_match(current_dt),
+            "matches_today": float(self.matches_today(current_dt)),
+            "days_since_last_win": self.days_since_last_win(current_dt),
+            "win_streak": float(self.current_win_streak),
+            "loss_streak": float(self.current_loss_streak),
+            "elo_momentum": self.elo_momentum(),
         }
 
-    def update(
-        self,
-        won: bool,
-        points_for: float,
-        points_against: float,
-        total_points: float,
-        first_set_total: float,
-        first_set_won: bool,
-        first_set_over_18_5: bool,
-        sets_played: int,
-    ) -> None:
+    def update(self, won, points_for, points_against, total_points, first_set_total,
+               first_set_won, first_set_over_18_5, sets_played, sets_won, sets_lost,
+               match_datetime, new_elo):
         self.matches += 1
         self.wins += int(bool(won))
         self.points_for_sum += float(points_for)
@@ -183,6 +206,22 @@ class PlayerRollingStats:
         self.first_set_wins += int(bool(first_set_won))
         self.first_set_over_18_5 += int(bool(first_set_over_18_5))
         self.sets_played_sum += float(sets_played)
+        self.sets_won_total += int(sets_won)
+        self.sets_lost_total += int(sets_lost)
+        if won:
+            self.current_win_streak += 1
+            self.current_loss_streak = 0
+            self.last_win_datetime = match_datetime
+        else:
+            self.current_loss_streak += 1
+            self.current_win_streak = 0
+        self.last_match_datetime = match_datetime
+        self.match_datetimes_today.append(match_datetime)
+        if len(self.match_datetimes_today) > 50:
+            self.match_datetimes_today = self.match_datetimes_today[-50:]
+        self.elo_history.append(float(new_elo))
+        point_diff = float(points_for) - float(points_against)
+        self.recent_point_diffs.append(point_diff)
         self.recent_wins.append(int(bool(won)))
         self.recent_total_points.append(float(total_points))
         self.recent_first_set_total.append(float(first_set_total))
@@ -192,23 +231,25 @@ class PlayerRollingStats:
 @dataclass
 class H2HRollingStats:
     matches: int = 0
-    wins_by_player: dict[str, int] = field(default_factory=dict)
+    wins_by_player: dict = field(default_factory=dict)
     total_points_sum: float = 0.0
     first_set_total_sum: float = 0.0
     first_set_over_18_5: int = 0
+    recent_results: deque = field(default_factory=lambda: deque(maxlen=5))
 
-    def as_features(self, player_a: str, defaults: dict[str, float]) -> dict[str, float]:
+    def as_features(self, player_a, defaults):
         if self.matches <= 0:
             return {
-                "h2h_matches": 0.0,
-                "h2h_a_win_rate": 0.5,
-                "h2h_a_win_diff": 0.0,
+                "h2h_matches": 0.0, "h2h_a_win_rate": 0.5, "h2h_a_win_diff": 0.0,
                 "h2h_avg_total_points": defaults["avg_total_points"],
                 "h2h_avg_first_set_total": defaults["avg_first_set_total"],
                 "h2h_first_over_rate": defaults["first_set_over_18_5_rate"],
+                "h2h_recent_a_win_rate": 0.5,
             }
         a_wins = float(self.wins_by_player.get(player_a, 0))
         win_rate = _rate(a_wins, float(self.matches), prior=0.5, strength=4)
+        recent_a_wins = sum(1 for winner in self.recent_results if winner == player_a)
+        recent_h2h_rate = recent_a_wins / len(self.recent_results) if self.recent_results else 0.5
         return {
             "h2h_matches": float(self.matches),
             "h2h_a_win_rate": win_rate,
@@ -216,53 +257,45 @@ class H2HRollingStats:
             "h2h_avg_total_points": float(self.total_points_sum / self.matches),
             "h2h_avg_first_set_total": float(self.first_set_total_sum / self.matches),
             "h2h_first_over_rate": float(self.first_set_over_18_5 / self.matches),
+            "h2h_recent_a_win_rate": float(recent_h2h_rate),
         }
 
-    def update(
-        self,
-        winner: str,
-        total_points: float,
-        first_set_total: float,
-        first_set_over_18_5: bool,
-    ) -> None:
+    def update(self, winner, total_points, first_set_total, first_set_over_18_5):
         self.matches += 1
         self.wins_by_player[winner] = self.wins_by_player.get(winner, 0) + 1
         self.total_points_sum += float(total_points)
         self.first_set_total_sum += float(first_set_total)
         self.first_set_over_18_5 += int(bool(first_set_over_18_5))
+        self.recent_results.append(winner)
+
 
 
 @dataclass
 class RollingFeatureState:
-    player_stats: dict[str, PlayerRollingStats] = field(default_factory=dict)
-    h2h_stats: dict[tuple[str, str], H2HRollingStats] = field(default_factory=dict)
-    elo: dict[str, float] = field(default_factory=dict)
-    defaults: dict[str, float] = field(default_factory=dict)
+    player_stats: dict = field(default_factory=dict)
+    h2h_stats: dict = field(default_factory=dict)
+    elo: dict = field(default_factory=dict)
+    defaults: dict = field(default_factory=dict)
     last_updated: Any = None
 
-    def player(self, name: str) -> PlayerRollingStats:
+    def player(self, name):
         if name not in self.player_stats:
             self.player_stats[name] = PlayerRollingStats()
         return self.player_stats[name]
 
-    def h2h(self, player_a: str, player_b: str) -> H2HRollingStats:
+    def h2h(self, player_a, player_b):
         key = tuple(sorted((player_a, player_b)))
         if key not in self.h2h_stats:
             self.h2h_stats[key] = H2HRollingStats()
         return self.h2h_stats[key]
 
-    def elo_for(self, player: str) -> float:
+    def elo_for(self, player):
         if player not in self.elo:
             self.elo[player] = 1500.0
         return float(self.elo[player])
 
 
-# -----------------------------
-# Dataset builder
-# -----------------------------
-
-
-def global_defaults(matches: pd.DataFrame) -> dict[str, float]:
+def global_defaults(matches):
     return {
         "avg_total_points": float(matches["total_points"].mean()),
         "std_total_points": float(matches["total_points"].std()),
@@ -274,186 +307,161 @@ def global_defaults(matches: pd.DataFrame) -> dict[str, float]:
     }
 
 
-def make_feature_row(
-    state: RollingFeatureState,
-    player_a: str,
-    player_b: str,
-) -> dict[str, float]:
+def make_feature_row(state, player_a, player_b, current_dt=None):
     defaults = state.defaults
-    a_stats = state.player(player_a).as_features(defaults)
-    b_stats = state.player(player_b).as_features(defaults)
+    a_stats = state.player(player_a).as_features(defaults, current_dt)
+    b_stats = state.player(player_b).as_features(defaults, current_dt)
     a_elo = state.elo_for(player_a)
     b_elo = state.elo_for(player_b)
     elo_prob = _elo_probability(a_elo, b_elo)
     h2h_features = state.h2h(player_a, player_b).as_features(player_a, defaults)
 
     features = {
-        "a_elo": a_elo,
-        "b_elo": b_elo,
-        "elo_diff": a_elo - b_elo,
-        "elo_probability": elo_prob,
-        "a_matches": a_stats["matches"],
-        "b_matches": b_stats["matches"],
+        "a_elo": a_elo, "b_elo": b_elo,
+        "elo_diff": a_elo - b_elo, "elo_probability": elo_prob,
+        "a_elo_momentum": a_stats["elo_momentum"],
+        "b_elo_momentum": b_stats["elo_momentum"],
+        "elo_momentum_diff": a_stats["elo_momentum"] - b_stats["elo_momentum"],
+        "a_matches": a_stats["matches"], "b_matches": b_stats["matches"],
         "match_count_diff": a_stats["matches"] - b_stats["matches"],
-        "a_win_rate": a_stats["win_rate"],
-        "b_win_rate": b_stats["win_rate"],
+        "a_win_rate": a_stats["win_rate"], "b_win_rate": b_stats["win_rate"],
         "win_rate_diff": a_stats["win_rate"] - b_stats["win_rate"],
         "a_recent_win_rate": a_stats["recent_win_rate"],
         "b_recent_win_rate": b_stats["recent_win_rate"],
         "recent_win_rate_diff": a_stats["recent_win_rate"] - b_stats["recent_win_rate"],
+        "a_weighted_recent_form": a_stats["weighted_recent_form"],
+        "b_weighted_recent_form": b_stats["weighted_recent_form"],
+        "weighted_form_diff": a_stats["weighted_recent_form"] - b_stats["weighted_recent_form"],
+        "a_set_win_rate": a_stats["set_win_rate"],
+        "b_set_win_rate": b_stats["set_win_rate"],
+        "set_win_rate_diff": a_stats["set_win_rate"] - b_stats["set_win_rate"],
         "a_first_set_win_rate": a_stats["first_set_win_rate"],
         "b_first_set_win_rate": b_stats["first_set_win_rate"],
         "first_set_win_rate_diff": a_stats["first_set_win_rate"] - b_stats["first_set_win_rate"],
         "a_point_diff_avg": a_stats["point_diff_avg"],
         "b_point_diff_avg": b_stats["point_diff_avg"],
         "point_diff_diff": a_stats["point_diff_avg"] - b_stats["point_diff_avg"],
+        "a_recent_point_diff": a_stats["recent_point_diff"],
+        "b_recent_point_diff": b_stats["recent_point_diff"],
+        "recent_point_diff_diff": a_stats["recent_point_diff"] - b_stats["recent_point_diff"],
         "a_avg_total_points": a_stats["avg_total_points"],
         "b_avg_total_points": b_stats["avg_total_points"],
         "avg_total_points_mean": (a_stats["avg_total_points"] + b_stats["avg_total_points"]) / 2,
         "avg_total_points_diff": a_stats["avg_total_points"] - b_stats["avg_total_points"],
         "a_recent_avg_total_points": a_stats["recent_avg_total_points"],
         "b_recent_avg_total_points": b_stats["recent_avg_total_points"],
-        "recent_avg_total_points_mean": (
-            a_stats["recent_avg_total_points"] + b_stats["recent_avg_total_points"]
-        )
-        / 2,
+        "recent_avg_total_points_mean": (a_stats["recent_avg_total_points"] + b_stats["recent_avg_total_points"]) / 2,
         "a_avg_first_set_total": a_stats["avg_first_set_total"],
         "b_avg_first_set_total": b_stats["avg_first_set_total"],
-        "avg_first_set_total_mean": (
-            a_stats["avg_first_set_total"] + b_stats["avg_first_set_total"]
-        )
-        / 2,
+        "avg_first_set_total_mean": (a_stats["avg_first_set_total"] + b_stats["avg_first_set_total"]) / 2,
         "a_recent_avg_first_set_total": a_stats["recent_avg_first_set_total"],
         "b_recent_avg_first_set_total": b_stats["recent_avg_first_set_total"],
-        "recent_avg_first_set_total_mean": (
-            a_stats["recent_avg_first_set_total"]
-            + b_stats["recent_avg_first_set_total"]
-        )
-        / 2,
+        "recent_avg_first_set_total_mean": (a_stats["recent_avg_first_set_total"] + b_stats["recent_avg_first_set_total"]) / 2,
         "a_first_over_rate": a_stats["first_over_rate"],
         "b_first_over_rate": b_stats["first_over_rate"],
-        "first_over_rate_mean": (a_stats["first_over_rate"] + b_stats["first_over_rate"])
-        / 2,
+        "first_over_rate_mean": (a_stats["first_over_rate"] + b_stats["first_over_rate"]) / 2,
         "first_over_rate_diff": a_stats["first_over_rate"] - b_stats["first_over_rate"],
         "a_recent_first_over_rate": a_stats["recent_first_over_rate"],
         "b_recent_first_over_rate": b_stats["recent_first_over_rate"],
-        "recent_first_over_rate_mean": (
-            a_stats["recent_first_over_rate"] + b_stats["recent_first_over_rate"]
-        )
-        / 2,
+        "recent_first_over_rate_mean": (a_stats["recent_first_over_rate"] + b_stats["recent_first_over_rate"]) / 2,
+        "a_hours_since_last": a_stats["hours_since_last"],
+        "b_hours_since_last": b_stats["hours_since_last"],
+        "a_matches_today": a_stats["matches_today"],
+        "b_matches_today": b_stats["matches_today"],
+        "matches_today_diff": a_stats["matches_today"] - b_stats["matches_today"],
+        "a_days_since_last_win": a_stats["days_since_last_win"],
+        "b_days_since_last_win": b_stats["days_since_last_win"],
+        "a_win_streak": a_stats["win_streak"],
+        "b_win_streak": b_stats["win_streak"],
+        "a_loss_streak": a_stats["loss_streak"],
+        "b_loss_streak": b_stats["loss_streak"],
+        "streak_diff": (a_stats["win_streak"] - a_stats["loss_streak"]) - (b_stats["win_streak"] - b_stats["loss_streak"]),
         **h2h_features,
     }
     return {col: float(features[col]) for col in FEATURE_COLUMNS}
 
 
-def _append_training_rows(
-    rows: list[dict[str, Any]],
-    state: RollingFeatureState,
-    player1: str,
-    player2: str,
-    winner: str,
-    total_points: float,
-    first_set_total: float,
-    first_set_over_18_5: bool,
-    date_time: Any,
-    source_match_id: Any,
-) -> None:
-    p1_features = make_feature_row(state, player1, player2)
-    p1_features.update(
-        {
-            "player_a": player1,
-            "player_b": player2,
-            "date_time": date_time,
-            "source_match_id": source_match_id,
-            "orientation": "p1_vs_p2",
-            TARGET_WIN: int(winner == player1),
-            TARGET_FIRST_OVER: int(bool(first_set_over_18_5)),
-            TARGET_TOTAL_POINTS: float(total_points),
-            TARGET_FIRST_SET_POINTS: float(first_set_total),
-        }
-    )
+def _append_training_rows(rows, state, player1, player2, winner, total_points,
+                          first_set_total, first_set_over_18_5, date_time, source_match_id):
+    p1_features = make_feature_row(state, player1, player2, date_time)
+    p1_features.update({
+        "player_a": player1, "player_b": player2,
+        "date_time": date_time, "source_match_id": source_match_id,
+        "orientation": "p1_vs_p2",
+        TARGET_WIN: int(winner == player1),
+        TARGET_FIRST_OVER: int(bool(first_set_over_18_5)),
+        TARGET_TOTAL_POINTS: float(total_points),
+        TARGET_FIRST_SET_POINTS: float(first_set_total),
+    })
     rows.append(p1_features)
 
-    p2_features = make_feature_row(state, player2, player1)
-    p2_features.update(
-        {
-            "player_a": player2,
-            "player_b": player1,
-            "date_time": date_time,
-            "source_match_id": source_match_id,
-            "orientation": "p2_vs_p1",
-            TARGET_WIN: int(winner == player2),
-            TARGET_FIRST_OVER: int(bool(first_set_over_18_5)),
-            TARGET_TOTAL_POINTS: float(total_points),
-            TARGET_FIRST_SET_POINTS: float(first_set_total),
-        }
-    )
+    p2_features = make_feature_row(state, player2, player1, date_time)
+    p2_features.update({
+        "player_a": player2, "player_b": player1,
+        "date_time": date_time, "source_match_id": source_match_id,
+        "orientation": "p2_vs_p1",
+        TARGET_WIN: int(winner == player2),
+        TARGET_FIRST_OVER: int(bool(first_set_over_18_5)),
+        TARGET_TOTAL_POINTS: float(total_points),
+        TARGET_FIRST_SET_POINTS: float(first_set_total),
+    })
     rows.append(p2_features)
 
 
-def _update_state_from_match(state: RollingFeatureState, row: Any, k_factor: float) -> None:
+def _update_state_from_match(state, row, k_factor_base=32.0):
     p1 = str(row.player1)
     p2 = str(row.player2)
     winner = str(row.winner)
     p1_won = bool(row.p1_won)
+    match_dt = row.date_time
 
     p1_elo = state.elo_for(p1)
     p2_elo = state.elo_for(p2)
     p1_expected = _elo_probability(p1_elo, p2_elo)
     p1_score = 1.0 if p1_won else 0.0
-    state.elo[p1] = p1_elo + k_factor * (p1_score - p1_expected)
-    state.elo[p2] = p2_elo + k_factor * ((1.0 - p1_score) - (1.0 - p1_expected))
+
+    p1_matches = state.player(p1).matches
+    p2_matches = state.player(p2).matches
+    k_p1 = _dynamic_k_factor(p1_matches)
+    k_p2 = _dynamic_k_factor(p2_matches)
+
+    p1_sets = int(row.p1_sets_won)
+    p2_sets = int(row.p2_sets_won)
+    margin_mult = _margin_multiplier(p1_sets, p2_sets)
+
+    new_p1_elo = p1_elo + k_p1 * margin_mult * (p1_score - p1_expected)
+    new_p2_elo = p2_elo + k_p2 * margin_mult * ((1.0 - p1_score) - (1.0 - p1_expected))
+
+    state.elo[p1] = new_p1_elo
+    state.elo[p2] = new_p2_elo
 
     total_points = float(row.total_points)
     first_set_total = float(row.first_set_total)
     first_over = bool(row.first_set_over_18_5)
 
     state.player(p1).update(
-        won=p1_won,
-        points_for=float(row.p1_points),
-        points_against=float(row.p2_points),
-        total_points=total_points,
-        first_set_total=first_set_total,
-        first_set_won=bool(row.first_set_p1_won),
-        first_set_over_18_5=first_over,
-        sets_played=int(row.sets_played),
+        won=p1_won, points_for=float(row.p1_points), points_against=float(row.p2_points),
+        total_points=total_points, first_set_total=first_set_total,
+        first_set_won=bool(row.first_set_p1_won), first_set_over_18_5=first_over,
+        sets_played=int(row.sets_played), sets_won=p1_sets, sets_lost=p2_sets,
+        match_datetime=match_dt, new_elo=new_p1_elo,
     )
     state.player(p2).update(
-        won=not p1_won,
-        points_for=float(row.p2_points),
-        points_against=float(row.p1_points),
-        total_points=total_points,
-        first_set_total=first_set_total,
-        first_set_won=bool(row.first_set_p2_won),
-        first_set_over_18_5=first_over,
-        sets_played=int(row.sets_played),
+        won=not p1_won, points_for=float(row.p2_points), points_against=float(row.p1_points),
+        total_points=total_points, first_set_total=first_set_total,
+        first_set_won=bool(row.first_set_p2_won), first_set_over_18_5=first_over,
+        sets_played=int(row.sets_played), sets_won=p2_sets, sets_lost=p1_sets,
+        match_datetime=match_dt, new_elo=new_p2_elo,
     )
     state.h2h(p1, p2).update(
-        winner=winner,
-        total_points=total_points,
-        first_set_total=first_set_total,
-        first_set_over_18_5=first_over,
+        winner=winner, total_points=total_points,
+        first_set_total=first_set_total, first_set_over_18_5=first_over,
     )
-    state.last_updated = row.date_time
+    state.last_updated = match_dt
 
 
-def build_feature_frame(
-    matches: pd.DataFrame,
-    k_factor: float = 24.0,
-    max_rows: int | None = None,
-) -> tuple[pd.DataFrame, RollingFeatureState]:
-    """Create chronological pre-match ML features and the final rolling state.
 
-    Two training rows are created per match:
-    - player1 vs player2
-    - player2 vs player1
-
-    This teaches the model to predict "Player A wins" without learning a fake
-    player1/player2 side advantage.
-
-    If max_rows is provided, only the most recent orientation rows are retained
-    for fitting while the rolling state still processes every match.
-    """
+def build_feature_frame(matches, k_factor=32.0, max_rows=None):
     df = matches.copy()
     if "total_points" not in df.columns:
         df = enrich_matches(df)
@@ -463,300 +471,208 @@ def build_feature_frame(
     rows = deque(maxlen=int(max_rows)) if max_rows and max_rows > 0 else []
     start_feature_match = 0
     if max_rows and max_rows > 0:
-        # Each match creates two orientation rows. For capped training, skip
-        # feature-row creation until the recent window while still updating
-        # rolling state for the full historical context.
         start_feature_match = max(0, len(df) - int(math.ceil(max_rows / 2)))
 
     for idx, row in enumerate(df.itertuples(index=False)):
         if idx >= start_feature_match:
             _append_training_rows(
-                rows=rows,
-                state=state,
-                player1=str(row.player1),
-                player2=str(row.player2),
-                winner=str(row.winner),
-                total_points=float(row.total_points),
+                rows=rows, state=state,
+                player1=str(row.player1), player2=str(row.player2),
+                winner=str(row.winner), total_points=float(row.total_points),
                 first_set_total=float(row.first_set_total),
                 first_set_over_18_5=bool(row.first_set_over_18_5),
-                date_time=row.date_time,
-                source_match_id=row.source_match_id,
+                date_time=row.date_time, source_match_id=row.source_match_id,
             )
-        _update_state_from_match(state, row, k_factor=k_factor)
+        _update_state_from_match(state, row, k_factor_base=k_factor)
 
     features = pd.DataFrame(rows)
     return features, state
 
 
-# -----------------------------
-# Training and evaluation
-# -----------------------------
-
-
-def _xgboost_available() -> bool:
+def _xgboost_available():
     try:
-        import xgboost  # noqa: F401
-
+        import xgboost
         return True
     except Exception:
         return False
 
 
-def _make_classifier(algorithm: str, random_state: int):
+def _make_classifier(algorithm, random_state):
     if algorithm == "xgboost":
         from xgboost import XGBClassifier
-
         return XGBClassifier(
-            n_estimators=280,
-            max_depth=3,
-            learning_rate=0.055,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            objective="binary:logistic",
-            eval_metric="logloss",
-            tree_method="hist",
-            n_jobs=-1,
+            n_estimators=500, max_depth=5, learning_rate=0.03,
+            subsample=0.85, colsample_bytree=0.85, min_child_weight=3,
+            reg_alpha=0.1, reg_lambda=1.0, objective="binary:logistic",
+            eval_metric="logloss", tree_method="hist", n_jobs=-1,
             random_state=random_state,
         )
-
     from sklearn.ensemble import HistGradientBoostingClassifier
-
     return HistGradientBoostingClassifier(
-        max_iter=220,
-        learning_rate=0.055,
-        max_leaf_nodes=31,
-        l2_regularization=0.05,
-        random_state=random_state,
+        max_iter=400, learning_rate=0.03, max_leaf_nodes=63,
+        l2_regularization=0.1, random_state=random_state,
     )
 
 
-def _make_regressor(algorithm: str, random_state: int):
+def _make_regressor(algorithm, random_state):
     if algorithm == "xgboost":
         from xgboost import XGBRegressor
-
         return XGBRegressor(
-            n_estimators=300,
-            max_depth=3,
-            learning_rate=0.055,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            objective="reg:squarederror",
-            tree_method="hist",
-            n_jobs=-1,
-            random_state=random_state,
+            n_estimators=500, max_depth=5, learning_rate=0.03,
+            subsample=0.85, colsample_bytree=0.85, min_child_weight=3,
+            reg_alpha=0.1, reg_lambda=1.0, objective="reg:squarederror",
+            tree_method="hist", n_jobs=-1, random_state=random_state,
         )
-
     from sklearn.ensemble import HistGradientBoostingRegressor
-
     return HistGradientBoostingRegressor(
-        max_iter=240,
-        learning_rate=0.055,
-        max_leaf_nodes=31,
-        l2_regularization=0.05,
-        random_state=random_state,
+        max_iter=400, learning_rate=0.03, max_leaf_nodes=63,
+        l2_regularization=0.1, random_state=random_state,
     )
 
 
-def _predict_probability(model: Any, x: pd.DataFrame) -> np.ndarray:
+def _predict_probability(model, x):
     if hasattr(model, "predict_proba"):
         return model.predict_proba(x)[:, 1]
-    # Fallback for unusual estimators.
     pred = model.predict(x)
     return np.clip(pred.astype(float), 0.0, 1.0)
 
 
-def _classification_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> dict[str, float]:
-    from sklearn.metrics import accuracy_score, brier_score_loss, log_loss, roc_auc_score
+def train_model_bundle(matches, algorithm="xgboost", max_training_rows=None,
+                       test_fraction=0.2, random_state=42):
+    from sklearn.metrics import (accuracy_score, brier_score_loss, log_loss,
+                                  roc_auc_score, mean_absolute_error,
+                                  mean_squared_error, r2_score)
 
-    y_pred = (y_prob >= 0.5).astype(int)
-    metrics = {
-        "accuracy": float(accuracy_score(y_true, y_pred)),
-        "brier": float(brier_score_loss(y_true, y_prob)),
-        "log_loss": float(log_loss(y_true, np.clip(y_prob, 1e-6, 1 - 1e-6))),
-    }
-    try:
-        metrics["roc_auc"] = float(roc_auc_score(y_true, y_prob))
-    except ValueError:
-        metrics["roc_auc"] = float("nan")
-    return metrics
-
-
-def _regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
-    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-
-    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
-    return {
-        "mae": float(mean_absolute_error(y_true, y_pred)),
-        "rmse": rmse,
-        "r2": float(r2_score(y_true, y_pred)),
-        "residual_std": float(np.std(y_true - y_pred)),
-    }
-
-
-def _select_algorithm(algorithm: str) -> str:
-    if algorithm == "auto":
-        return "xgboost" if _xgboost_available() else "sklearn"
-    if algorithm not in {"xgboost", "sklearn"}:
-        raise ValueError("algorithm must be 'auto', 'xgboost', or 'sklearn'")
     if algorithm == "xgboost" and not _xgboost_available():
-        raise ImportError("xgboost is not installed. Install requirements or use algorithm='sklearn'.")
-    return algorithm
+        algorithm = "sklearn"
 
+    features_df, state = build_feature_frame(matches, max_rows=max_training_rows)
 
-def train_model_bundle(
-    matches: pd.DataFrame,
-    algorithm: str = "auto",
-    test_size: float = 0.2,
-    random_state: int = 42,
-    max_training_rows: int | None = None,
-) -> dict[str, Any]:
-    """Train winner, first-set O18.5, total-points, and first-set-points models."""
-    selected_algorithm = _select_algorithm(algorithm)
-    available_rows = int(len(matches) * 2)
-    feature_frame, state = build_feature_frame(matches, max_rows=max_training_rows)
-    feature_frame = feature_frame.sort_values(["date_time", "source_match_id", "orientation"])
-    training_frame = feature_frame.copy()
+    if features_df.empty:
+        raise ValueError("No features generated - check your data")
 
-    split_idx = max(1, int(len(training_frame) * (1 - test_size)))
-    if split_idx >= len(training_frame):
-        split_idx = len(training_frame) - 1
+    features_df = features_df.sort_values("date_time").reset_index(drop=True)
+    split_idx = int(len(features_df) * (1 - test_fraction))
+    train_df = features_df.iloc[:split_idx]
+    test_df = features_df.iloc[split_idx:]
 
-    train_df = training_frame.iloc[:split_idx].copy()
-    test_df = training_frame.iloc[split_idx:].copy()
-    x_train = train_df[FEATURE_COLUMNS].astype(float)
-    x_test = test_df[FEATURE_COLUMNS].astype(float)
+    X_train = train_df[FEATURE_COLUMNS].fillna(0.0)
+    X_test = test_df[FEATURE_COLUMNS].fillna(0.0)
 
-    models: dict[str, Any] = {}
-    metrics: dict[str, Any] = {}
+    models = {}
+    metrics = []
 
-    target_map = {
-        "winner": TARGET_WIN,
-        "first_set_over_18_5": TARGET_FIRST_OVER,
-    }
-    for name, target in target_map.items():
-        model = _make_classifier(selected_algorithm, random_state=random_state)
-        y_train = train_df[target].astype(int).to_numpy()
-        y_test = test_df[target].astype(int).to_numpy()
-        model.fit(x_train, y_train)
-        y_prob = _predict_probability(model, x_test)
-        models[name] = model
-        metrics[name] = _classification_metrics(y_test, y_prob)
+    y_train = train_df[TARGET_WIN]
+    y_test = test_df[TARGET_WIN]
+    winner_model = _make_classifier(algorithm, random_state)
+    winner_model.fit(X_train, y_train)
+    y_pred_proba = _predict_probability(winner_model, X_test)
+    y_pred = (y_pred_proba >= 0.5).astype(int)
+    metrics.append({
+        "model": "winner",
+        "accuracy": float(accuracy_score(y_test, y_pred)),
+        "brier": float(brier_score_loss(y_test, y_pred_proba)),
+        "log_loss": float(log_loss(y_test, np.clip(y_pred_proba, 0.001, 0.999))),
+        "roc_auc": float(roc_auc_score(y_test, y_pred_proba)),
+        "mae": None, "rmse": None, "r2": None, "residual_std": None,
+    })
+    models["winner"] = winner_model
 
-    regression_target_map = {
-        "total_points": TARGET_TOTAL_POINTS,
-        "first_set_points": TARGET_FIRST_SET_POINTS,
-    }
-    for name, target in regression_target_map.items():
-        model = _make_regressor(selected_algorithm, random_state=random_state)
-        y_train = train_df[target].astype(float).to_numpy()
-        y_test = test_df[target].astype(float).to_numpy()
-        model.fit(x_train, y_train)
-        y_pred = model.predict(x_test)
-        models[name] = model
-        metrics[name] = _regression_metrics(y_test, y_pred)
+    y_train = train_df[TARGET_FIRST_OVER]
+    y_test = test_df[TARGET_FIRST_OVER]
+    first_over_model = _make_classifier(algorithm, random_state)
+    first_over_model.fit(X_train, y_train)
+    y_pred_proba = _predict_probability(first_over_model, X_test)
+    y_pred = (y_pred_proba >= 0.5).astype(int)
+    metrics.append({
+        "model": "first_set_over_18_5",
+        "accuracy": float(accuracy_score(y_test, y_pred)),
+        "brier": float(brier_score_loss(y_test, y_pred_proba)),
+        "log_loss": float(log_loss(y_test, np.clip(y_pred_proba, 0.001, 0.999))),
+        "roc_auc": float(roc_auc_score(y_test, y_pred_proba)),
+        "mae": None, "rmse": None, "r2": None, "residual_std": None,
+    })
+    models["first_set_over_18_5"] = first_over_model
+
+    y_train = train_df[TARGET_TOTAL_POINTS]
+    y_test = test_df[TARGET_TOTAL_POINTS]
+    total_model = _make_regressor(algorithm, random_state)
+    total_model.fit(X_train, y_train)
+    y_pred = total_model.predict(X_test)
+    residuals = y_test - y_pred
+    metrics.append({
+        "model": "total_points",
+        "accuracy": None, "brier": None, "log_loss": None, "roc_auc": None,
+        "mae": float(mean_absolute_error(y_test, y_pred)),
+        "rmse": float(math.sqrt(mean_squared_error(y_test, y_pred))),
+        "r2": float(r2_score(y_test, y_pred)),
+        "residual_std": float(residuals.std()),
+    })
+    models["total_points"] = total_model
+
+    y_train = train_df[TARGET_FIRST_SET_POINTS]
+    y_test = test_df[TARGET_FIRST_SET_POINTS]
+    first_pts_model = _make_regressor(algorithm, random_state)
+    first_pts_model.fit(X_train, y_train)
+    y_pred = first_pts_model.predict(X_test)
+    residuals = y_test - y_pred
+    metrics.append({
+        "model": "first_set_points",
+        "accuracy": None, "brier": None, "log_loss": None, "roc_auc": None,
+        "mae": float(mean_absolute_error(y_test, y_pred)),
+        "rmse": float(math.sqrt(mean_squared_error(y_test, y_pred))),
+        "r2": float(r2_score(y_test, y_pred)),
+        "residual_std": float(residuals.std()),
+    })
+    models["first_set_points"] = first_pts_model
 
     bundle = {
         "models": models,
-        "metrics": metrics,
+        "state": state,
         "feature_columns": FEATURE_COLUMNS,
-        "feature_state": state,
-        "algorithm": selected_algorithm,
-        "trained_at_utc": datetime.now(timezone.utc).isoformat(),
-        "rows_total": available_rows,
-        "rows_used_for_training": int(len(training_frame)),
-        "train_rows": int(len(train_df)),
-        "test_rows": int(len(test_df)),
-        "date_min": str(feature_frame["date_time"].min()),
-        "date_max": str(feature_frame["date_time"].max()),
+        "metrics": metrics,
+        "algorithm": algorithm,
+        "train_rows": len(train_df),
+        "test_rows": len(test_df),
+        "total_rows": len(features_df),
+        "trained_at": datetime.now(timezone.utc).isoformat(),
     }
     return bundle
 
 
-# -----------------------------
-# Prediction and persistence
-# -----------------------------
+def metrics_table(bundle):
+    return pd.DataFrame(bundle.get("metrics", []))
 
 
-def save_model_bundle(bundle: dict[str, Any], path: str | Path) -> Path:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(bundle, path)
-    return path
-
-
-def load_model_bundle(path: str | Path) -> dict[str, Any]:
-    return joblib.load(path)
-
-
-def predict_with_bundle(
-    bundle: dict[str, Any],
-    player_a: str,
-    player_b: str,
-    first_set_line: float = 18.5,
-    total_points_line: float = 75.5,
-) -> dict[str, Any]:
-    if player_a == player_b:
-        raise ValueError("Choose two different players.")
-
-    state: RollingFeatureState = bundle["feature_state"]
-    feature_row = make_feature_row(state, player_a, player_b)
-    x = pd.DataFrame([feature_row], columns=bundle["feature_columns"]).astype(float)
+def predict_with_bundle(bundle, player_a, player_b, current_dt=None):
+    state = bundle["state"]
     models = bundle["models"]
-
-    winner_probability = float(_predict_probability(models["winner"], x)[0])
-    first_o18_probability = float(_predict_probability(models["first_set_over_18_5"], x)[0])
-    expected_total_points = float(models["total_points"].predict(x)[0])
-    expected_first_set_points = float(models["first_set_points"].predict(x)[0])
-
-    total_std = float(
-        bundle["metrics"].get("total_points", {}).get(
-            "residual_std", state.defaults.get("std_total_points", 16.6)
-        )
-    )
-    first_std = float(
-        bundle["metrics"].get("first_set_points", {}).get(
-            "residual_std", state.defaults.get("std_first_set_total", 3.2)
-        )
-    )
-
-    total_over_probability = _normal_over_probability(
-        expected_total_points, total_points_line, total_std
-    )
-    first_line_model_probability = _normal_over_probability(
-        expected_first_set_points, first_set_line, first_std
-    )
-    if abs(first_set_line - 18.5) < 1e-9:
-        first_over_probability = float(
-            max(0.02, min(0.98, 0.65 * first_o18_probability + 0.35 * first_line_model_probability))
-        )
-    else:
-        first_over_probability = first_line_model_probability
-
+    if current_dt is None:
+        current_dt = pd.Timestamp.now()
+    features = make_feature_row(state, player_a, player_b, current_dt)
+    X = pd.DataFrame([features])[FEATURE_COLUMNS].fillna(0.0)
+    winner_prob = float(_predict_probability(models["winner"], X)[0])
+    first_over_prob = float(_predict_probability(models["first_set_over_18_5"], X)[0])
+    total_pred = float(models["total_points"].predict(X)[0])
+    first_pts_pred = float(models["first_set_points"].predict(X)[0])
     return {
         "player_a": player_a,
         "player_b": player_b,
-        "player_a_win_probability": winner_probability,
-        "player_b_win_probability": 1 - winner_probability,
-        "predicted_winner": player_a if winner_probability >= 0.5 else player_b,
-        "expected_total_points": expected_total_points,
-        "total_points_line": float(total_points_line),
-        "total_points_over_probability": total_over_probability,
-        "total_points_under_probability": 1 - total_over_probability,
-        "expected_first_set_points": expected_first_set_points,
-        "first_set_line": float(first_set_line),
-        "first_set_over_probability": first_over_probability,
-        "first_set_under_probability": 1 - first_over_probability,
-        "raw_first_set_o18_5_probability": first_o18_probability,
-        "algorithm": bundle["algorithm"],
-        "trained_at_utc": bundle["trained_at_utc"],
-        "feature_row": feature_row,
+        "player_a_win_probability": winner_prob,
+        "player_b_win_probability": 1.0 - winner_prob,
+        "predicted_winner": player_a if winner_prob >= 0.5 else player_b,
+        "first_set_over_18_5_probability": first_over_prob,
+        "predicted_total_points": total_pred,
+        "predicted_first_set_points": first_pts_pred,
+        "features": features,
     }
 
 
-def metrics_table(bundle: dict[str, Any]) -> pd.DataFrame:
-    rows = []
-    for model_name, model_metrics in bundle.get("metrics", {}).items():
-        row = {"model": model_name}
-        row.update(model_metrics)
-        rows.append(row)
-    return pd.DataFrame(rows)
+def save_model_bundle(bundle, path):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(bundle, path)
+
+
+def load_model_bundle(path):
+    return joblib.load(Path(path))
