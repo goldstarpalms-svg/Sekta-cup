@@ -90,6 +90,13 @@ def first_set_intelligence(
     recent_h2h_over = float(recent_h2h["first_set_over_18_5"].mean()) if recent_h2h_count else np.nan
     h2h_avg = float(h2h["first_set_total"].mean()) if h2h_count else np.nan
     recent_h2h_avg = float(recent_h2h["first_set_total"].mean()) if recent_h2h_count else np.nan
+    recent_h2h_scores = ""
+    if recent_h2h_count and "first_set_p1_points" in recent_h2h.columns and "first_set_p2_points" in recent_h2h.columns:
+        recent_h2h_scores = ", ".join(
+            f"{int(r.first_set_p1_points)}-{int(r.first_set_p2_points)}"
+            for r in recent_h2h.head(5).itertuples()
+            if pd.notna(r.first_set_p1_points) and pd.notna(r.first_set_p2_points)
+        )
 
     # Closeness: close winner probability + close first-set win rates + close recent H2H first-set margins.
     winner_prob = max(_safe_float(pred.get("player_a_win_probability"), 0.5), _safe_float(pred.get("player_b_win_probability"), 0.5))
@@ -160,6 +167,36 @@ def first_set_intelligence(
     else:
         label = "Avoid"
 
+    # Gambler lean: less strict than the professional filter, with recent H2H
+    # first-set behavior weighted strongly. This is for visibility, not a
+    # guarantee. It helps users who want action see the practical lean.
+    h2h_component = recent_h2h_over if not pd.isna(recent_h2h_over) else h2h_over if not pd.isna(h2h_over) else 0.5
+    expected_component = max(0.0, min(1.0, 0.5 + (expected - line) / 7.0))
+    player_component = combined_over_tendency
+    close_component = 0.5 + (closeness_score - 0.5) * 0.35
+    h2h_weight = 0.42 if recent_h2h_count >= 3 else 0.25 if h2h_count >= 3 else 0.12
+    remaining = 1 - h2h_weight
+    gambler_over_score = (
+        h2h_component * h2h_weight
+        + expected_component * (remaining * 0.38)
+        + player_component * (remaining * 0.34)
+        + close_component * (remaining * 0.28)
+    )
+    gambler_pick = "Over" if gambler_over_score >= 0.5 else "Under"
+    gambler_confidence = abs(gambler_over_score - 0.5) * 2
+    if recent_h2h_count >= 3:
+        gambler_reason = f"recent H2H {recent_h2h_count} games, O18.5 {recent_h2h_over:.0%}, scores {recent_h2h_scores or '-'}"
+    elif h2h_count >= 3:
+        gambler_reason = f"H2H {h2h_count} games, O18.5 {h2h_over:.0%}"
+    else:
+        gambler_reason = "thin H2H, using player tempo + expected points"
+    if gambler_confidence >= 0.22:
+        gambler_label = f"Gambler {gambler_pick}"
+    elif gambler_confidence >= 0.12:
+        gambler_label = f"Small lean {gambler_pick}"
+    else:
+        gambler_label = "Pass / coin-flip"
+
     return {
         "first_set_model_pick": pick,
         "first_set_model_probability": pick_prob,
@@ -177,6 +214,12 @@ def first_set_intelligence(
         "recent_h2h_first_set_over_rate": recent_h2h_over,
         "h2h_first_set_avg": h2h_avg,
         "recent_h2h_first_set_avg": recent_h2h_avg,
+        "recent_h2h_first_set_scores": recent_h2h_scores,
+        "first_set_gambler_label": gambler_label,
+        "first_set_gambler_pick": gambler_pick,
+        "first_set_gambler_over_score": gambler_over_score,
+        "first_set_gambler_confidence": gambler_confidence,
+        "first_set_gambler_reason": gambler_reason,
         "player1_first_set_type": first_set_player_type(a),
         "player2_first_set_type": first_set_player_type(b),
     }

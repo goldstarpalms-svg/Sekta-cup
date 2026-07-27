@@ -1246,6 +1246,8 @@ elif page == "Live Predictions":
         "first_set_pick",
         "first_set_probability",
         "first_set_label",
+        "first_set_gambler_label",
+        "first_set_gambler_reason",
         "first_set_signal_agreement",
         "first_set_strength",
         "expected_first_set_points",
@@ -2107,7 +2109,7 @@ elif page == "First Set Intelligence":
     with f2:
         fs_line = st.number_input("First set line", 10.5, 35.5, 18.5, 0.5, key="fs_line")
     with f3:
-        show_only_fs = st.checkbox("Show only Strong/Lean first-set picks", value=True)
+        fs_view = st.selectbox("View", ["Gambler view - show all leans", "Only Strong/Lean", "Only Strong"], index=0)
 
     try:
         upcoming = load_official_nearest().head(fs_limit)
@@ -2124,24 +2126,29 @@ elif page == "First Set Intelligence":
         st.warning("No upcoming matches available.")
         st.stop()
 
-    if show_only_fs:
+    if fs_view == "Only Strong/Lean":
         fs_df = fs_df.loc[fs_df["first_set_label"].astype(str).ne("Avoid")]
+    elif fs_view == "Only Strong":
+        fs_df = fs_df.loc[fs_df["first_set_label"].astype(str).str.startswith("Strong")]
+    else:
+        fs_df = fs_df.sort_values(["first_set_gambler_confidence", "h2h_matches"], ascending=False)
 
     s1, s2, s3, s4 = st.columns(4)
     s1.metric("Matches shown", f"{len(fs_df):,}")
     s2.metric("Strong first-set", f"{fs_df['first_set_label'].astype(str).str.startswith('Strong').sum():,}" if not fs_df.empty else "0")
-    s3.metric("Lean first-set", f"{fs_df['first_set_label'].astype(str).str.startswith('Lean').sum():,}" if not fs_df.empty else "0")
-    s4.metric("Avg signal agreement", format_percent(fs_df["first_set_signal_agreement"].mean()) if not fs_df.empty else "-")
+    s3.metric("Gambler leans", f"{fs_df['first_set_gambler_label'].astype(str).str.contains('Gambler|Small lean', regex=True).sum():,}" if not fs_df.empty else "0")
+    s4.metric("Avg gambler confidence", format_percent(fs_df["first_set_gambler_confidence"].mean()) if not fs_df.empty else "-")
 
     cols = [
-        "time_lagos", "location", "match", "first_set_label", "first_set_model_pick", "first_set_model_probability",
+        "time_lagos", "location", "match", "first_set_gambler_label", "first_set_gambler_pick", "first_set_gambler_confidence",
+        "first_set_gambler_reason", "recent_h2h_first_set_scores", "first_set_label", "first_set_model_pick", "first_set_model_probability",
         "expected_first_set_points", "first_set_signal_agreement", "first_set_over_votes", "first_set_under_votes",
         "first_set_closeness_score", "first_set_volatility", "first_set_signals", "first_set_avoid_reasons",
         "player1_first_set_type", "player2_first_set_type", "recent_h2h_first_set_over_rate", "recent_h2h_first_set_avg",
         "h2h_matches", "match_id"
     ]
     view = fs_df[[c for c in cols if c in fs_df.columns]].copy()
-    for c in ["first_set_model_probability", "first_set_signal_agreement", "first_set_closeness_score", "recent_h2h_first_set_over_rate"]:
+    for c in ["first_set_model_probability", "first_set_signal_agreement", "first_set_closeness_score", "recent_h2h_first_set_over_rate", "first_set_gambler_confidence"]:
         if c in view:
             view[c] = view[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
     for c in ["expected_first_set_points", "recent_h2h_first_set_avg"]:
@@ -2150,7 +2157,7 @@ elif page == "First Set Intelligence":
     st.dataframe(view, use_container_width=True, height=620)
 
     st.subheader("First-set betting rule")
-    st.info("Prefer Strong first-set labels. Avoid if expected points are too close to 18.5, signals conflict, H2H is thin, or volatility is high.")
+    st.info("Gambler view shows practical leans for more matches, but the safest plays are still Strong first-set labels. Recent H2H scores are shown so you can judge the matchup style before betting.")
     st.download_button("Download first-set intelligence CSV", fs_df.to_csv(index=False).encode("utf-8"), "first_set_intelligence.csv", "text/csv")
 
 
