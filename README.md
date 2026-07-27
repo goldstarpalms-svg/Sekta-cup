@@ -16,6 +16,7 @@ It includes:
 - automatic grading for saved/uploaded Setka prediction snapshots
 - enhanced winner model with recent H2H, point-difference, set-difference, calibration, and upset-risk flags
 - Model Intelligence layer with calibrated probabilities, model agreement, fatigue/session risk, market confidence, and player reliability tags
+- First Set Intelligence Engine with player starter types, first-set tempo, volatility, H2H recency, closeness score, Strong/Lean/Avoid labels
 - set-count markets: Over/Under 3.5 sets and Over/Under 4.5 sets
 - time-split Accuracy Lab backtesting with recommended probability filters
 - smart stake calculator for table-tennis selections with edge, EV, and safer fractional-Kelly sizing

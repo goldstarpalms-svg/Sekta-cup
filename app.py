@@ -11,6 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from src.backtesting import run_holdout_backtest, threshold_table
+from src.first_set_intelligence import first_set_intelligence
 from src.github_storage import github_storage_enabled
 from src.model_intelligence import (
     calibrated_probability,
@@ -234,6 +235,7 @@ with st.sidebar:
             "Bankroll Journal",
             "Results Checker",
             "Match Predictor",
+            "First Set Intelligence",
             "Model Intelligence",
             "Accuracy Lab",
             "Smart Stake Calc",
@@ -410,6 +412,10 @@ def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line
     total_market_conf = market_confidence_label(total_prob, pred["confidence"], "Low", agreement["winner_agreement_score"], fatigue["match_fatigue_risk"])
     first_market_conf = market_confidence_label(first_prob, pred["confidence"], "Low", agreement["winner_agreement_score"], fatigue["match_fatigue_risk"])
     sets_market_conf = market_confidence_label(sets_prob, pred["confidence"], "Low", agreement["winner_agreement_score"], fatigue["match_fatigue_risk"])
+    first_intel = first_set_intelligence(row["player1"], row["player2"], pred, player_stats, matches, first_set_line)
+    # If first-set intelligence says Avoid, downgrade first-set confidence so it does not become a misleading GREEN pick.
+    if first_intel.get("first_set_label") == "Avoid":
+        first_market_conf = "Weak"
     return {
         "match_id": row.get("match_id"),
         "time_lagos": row.get("start_time_lagos"),
@@ -449,6 +455,7 @@ def prediction_pick_row(row: pd.Series, first_set_line: float, total_points_line
         **fatigue,
         "player1_reliability": player_reliability_tags(player_stats, row["player1"]),
         "player2_reliability": player_reliability_tags(player_stats, row["player2"]),
+        **first_intel,
     }
 
 
@@ -541,7 +548,7 @@ def format_prediction_table(df: pd.DataFrame) -> pd.DataFrame:
     """
     out = df.copy()
     out = out.loc[:, ~out.columns.duplicated()].copy()
-    for col in ["winner_probability", "total_probability", "first_set_probability", "sets_probability", "best_probability"]:
+    for col in ["winner_probability", "total_probability", "first_set_probability", "sets_probability", "best_probability", "first_set_signal_agreement"]:
         if col in out:
             out[col] = out[col].map(lambda x: f"{x:.1%}" if pd.notna(x) and not isinstance(x, str) else x if pd.notna(x) else "-")
     for col in ["expected_total_points", "expected_first_set_points", "expected_sets_played", "confidence_score", "edge_score"]:
@@ -1238,6 +1245,8 @@ elif page == "Live Predictions":
         "expected_total_points",
         "first_set_pick",
         "first_set_probability",
+        "first_set_label",
+        "first_set_signal_agreement",
         "first_set_strength",
         "expected_first_set_points",
         "sets_pick",
@@ -2082,6 +2091,67 @@ elif page == "Match Predictor":
         st.info("No direct head-to-head matches found in the uploaded history.")
     else:
         st.dataframe(h2h_display_table(pred["h2h_table"]), use_container_width=True)
+
+
+elif page == "First Set Intelligence":
+    st.title("🎯 First Set Intelligence")
+    st.markdown("Dedicated Setka first-set Over/Under scanner. It studies the kind of players together: fast starters, under starters, volatility, H2H first-set tempo, and closeness.")
+
+    if ODDS_IMPORT_ERROR is not None:
+        st.error(f"Live dependencies could not be imported: {ODDS_IMPORT_ERROR}")
+        st.stop()
+
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        fs_limit = st.slider("Upcoming matches", 5, 50, 25, 5, key="fs_limit")
+    with f2:
+        fs_line = st.number_input("First set line", 10.5, 35.5, 18.5, 0.5, key="fs_line")
+    with f3:
+        show_only_fs = st.checkbox("Show only Strong/Lean first-set picks", value=True)
+
+    try:
+        upcoming = load_official_nearest().head(fs_limit)
+    except Exception as exc:
+        st.exception(exc)
+        st.stop()
+
+    rows = []
+    for _, match_row in upcoming.iterrows():
+        if match_row.get("player1") and match_row.get("player2"):
+            rows.append(prediction_pick_row(match_row, fs_line, 75.5, 3.5))
+    fs_df = apply_pick_strengths(pd.DataFrame(rows))
+    if fs_df.empty:
+        st.warning("No upcoming matches available.")
+        st.stop()
+
+    if show_only_fs:
+        fs_df = fs_df.loc[fs_df["first_set_label"].astype(str).ne("Avoid")]
+
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Matches shown", f"{len(fs_df):,}")
+    s2.metric("Strong first-set", f"{fs_df['first_set_label'].astype(str).str.startswith('Strong').sum():,}" if not fs_df.empty else "0")
+    s3.metric("Lean first-set", f"{fs_df['first_set_label'].astype(str).str.startswith('Lean').sum():,}" if not fs_df.empty else "0")
+    s4.metric("Avg signal agreement", format_percent(fs_df["first_set_signal_agreement"].mean()) if not fs_df.empty else "-")
+
+    cols = [
+        "time_lagos", "location", "match", "first_set_label", "first_set_model_pick", "first_set_model_probability",
+        "expected_first_set_points", "first_set_signal_agreement", "first_set_over_votes", "first_set_under_votes",
+        "first_set_closeness_score", "first_set_volatility", "first_set_signals", "first_set_avoid_reasons",
+        "player1_first_set_type", "player2_first_set_type", "recent_h2h_first_set_over_rate", "recent_h2h_first_set_avg",
+        "h2h_matches", "match_id"
+    ]
+    view = fs_df[[c for c in cols if c in fs_df.columns]].copy()
+    for c in ["first_set_model_probability", "first_set_signal_agreement", "first_set_closeness_score", "recent_h2h_first_set_over_rate"]:
+        if c in view:
+            view[c] = view[c].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+    for c in ["expected_first_set_points", "recent_h2h_first_set_avg"]:
+        if c in view:
+            view[c] = view[c].map(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
+    st.dataframe(view, use_container_width=True, height=620)
+
+    st.subheader("First-set betting rule")
+    st.info("Prefer Strong first-set labels. Avoid if expected points are too close to 18.5, signals conflict, H2H is thin, or volatility is high.")
+    st.download_button("Download first-set intelligence CSV", fs_df.to_csv(index=False).encode("utf-8"), "first_set_intelligence.csv", "text/csv")
 
 
 elif page == "Model Intelligence":
